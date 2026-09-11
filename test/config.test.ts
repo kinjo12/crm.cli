@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import { execSync } from 'node:child_process'
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -9,10 +11,37 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { platform } from 'node:process'
 
 import { createTestContext, initGitRepo } from './helpers.ts'
 
 const CRM_BIN = join(import.meta.dir, '..', 'src', 'cli.ts')
+
+/**
+ * Deny write access to `dir` for the current user so a subsequent file
+ * creation attempt inside it fails deterministically. On Windows, a plain
+ * `chmodSync` read-only attribute on a *directory* does not block creating
+ * new files inside it, so an ACL deny rule (`icacls`) is required instead.
+ */
+function lockDirectory(dir: string): void {
+  if (platform === 'win32') {
+    execSync(`icacls "${dir}" /deny "${process.env.USERNAME}:(OI)(CI)W"`, {
+      stdio: 'ignore',
+    })
+  } else {
+    chmodSync(dir, 0o555)
+  }
+}
+
+function unlockDirectory(dir: string): void {
+  if (platform === 'win32') {
+    execSync(`icacls "${dir}" /remove:d "${process.env.USERNAME}"`, {
+      stdio: 'ignore',
+    })
+  } else {
+    chmodSync(dir, 0o755)
+  }
+}
 
 describe('config: phone settings', () => {
   test('phone.default_country allows short numbers', () => {
@@ -987,6 +1016,42 @@ describe('config resolution: scoped to project directory (security)', () => {
     // The malicious hook must NOT have run — the fake ".git" file must not
     // be trusted as a project-root boundary.
     expect(existsSync(join(ctx.dir, 'pwned.txt'))).toBe(false)
+  })
+})
+
+describe('config resolution: auto-create-default-config failure handling', () => {
+  test('loadConfig falls back to in-memory defaults when the auto-created config cannot be written', () => {
+    const ctx = createTestContext({ noConfig: true })
+    const projectDir = join(ctx.dir, 'project')
+    mkdirSync(projectDir, { recursive: true })
+    // No .git anywhere — findProjectRoot has no boundary, so the
+    // auto-created config would be written directly into projectDir.
+
+    lockDirectory(projectDir)
+    try {
+      const proc = Bun.spawnSync(
+        [
+          'bun',
+          'run',
+          CRM_BIN,
+          '--db',
+          ctx.dbPath,
+          'contact',
+          'add',
+          '--name',
+          'Jane',
+        ],
+        { cwd: projectDir, env: { ...process.env, NO_COLOR: '1' } },
+      )
+      // Must NOT hard-fail with a raw fs error — should continue using the
+      // in-memory default config instead.
+      expect(proc.exitCode).toBe(0)
+      expect(proc.stdout.toString().trim().length).toBeGreaterThan(0)
+      // No config file should have been left behind in the locked directory.
+      expect(existsSync(join(projectDir, 'crm.toml'))).toBe(false)
+    } finally {
+      unlockDirectory(projectDir)
+    }
   })
 })
 

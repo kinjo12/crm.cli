@@ -230,16 +230,23 @@ export function loadConfig(opts: {
   if (!configPath) {
     const root = findProjectRoot(process.cwd())
     const p = join(root ?? process.cwd(), 'crm.toml')
-    createDefaultConfig(p)
-    configPath = p
+    try {
+      createDefaultConfig(p)
+      configPath = p
+    } catch (_e) {
+      console.error(`Warning: could not create default config at ${p}`)
+      configPath = null
+    }
   }
 
-  try {
-    const raw = readFileSync(configPath, 'utf-8')
-    const parsed = parseTOML(raw)
-    config = mergeConfig(config, parsed)
-  } catch (_e) {
-    console.error(`Warning: could not parse config file ${configPath}`)
+  if (configPath) {
+    try {
+      const raw = readFileSync(configPath, 'utf-8')
+      const parsed = parseTOML(raw)
+      config = mergeConfig(config, parsed)
+    } catch (_e) {
+      console.error(`Warning: could not parse config file ${configPath}`)
+    }
   }
 
   // Env var overrides (take priority over config file)
