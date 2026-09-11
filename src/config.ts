@@ -59,22 +59,28 @@ function defaultConfig(): CRMConfig {
 }
 
 /**
- * Find the project root: the nearest ancestor of `startDir` (inclusive) that
- * contains a `.git` directory. If no ancestor has `.git` (even at the
- * filesystem root), the project root is `startDir` itself — the narrowest
- * possible interpretation when project boundaries are unknown.
+ * Find the real git repository root containing `startDir`, by shelling out
+ * to `git rev-parse --show-toplevel`. This is the only trustworthy way to
+ * establish a project-root boundary: unlike checking for a `.git` path with
+ * `existsSync`, it can't be spoofed by planting an arbitrary file or
+ * directory named `.git` in an ancestor directory, and it correctly handles
+ * worktrees, submodules, and `.git` files (vs. directories).
+ *
+ * Returns `null` if `startDir` is not inside a git repository at all (or
+ * `git` isn't installed) — in that case there is no project-root boundary
+ * to find, and callers must not search upward toward the filesystem root.
  */
-function findProjectRoot(startDir: string): string {
-  let dir = resolve(startDir)
-  while (true) {
-    if (existsSync(join(dir, '.git'))) {
-      return dir
-    }
-    const parent = dirname(dir)
-    if (parent === dir) {
-      return resolve(startDir)
-    }
-    dir = parent
+function findProjectRoot(startDir: string): string | null {
+  try {
+    const out = execSync('git rev-parse --show-toplevel', {
+      cwd: startDir,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+      .toString()
+      .trim()
+    return out ? resolve(out) : null
+  } catch {
+    return null
   }
 }
 
@@ -84,13 +90,24 @@ function findProjectRoot(startDir: string): string {
  * This prevents an unrelated ancestor directory's `crm.toml` — whose
  * `hooks` are executed without confirmation — from being loaded.
  *
+ * If `startDir` isn't inside a real git repository, there is no known
+ * project boundary, so only `startDir` itself is checked — never walking
+ * upward toward the filesystem root.
+ *
  * There is no implicit fallback to a global `~/.crm/config.toml`: if no
  * `crm.toml` is found within the project, callers fall back to the
  * built-in default config.
  */
 function findConfigFile(startDir: string): string | null {
   const root = findProjectRoot(startDir)
-  let dir = resolve(startDir)
+  const start = resolve(startDir)
+
+  if (root === null) {
+    const candidate = join(start, 'crm.toml')
+    return existsSync(candidate) ? candidate : null
+  }
+
+  let dir = start
   while (true) {
     const candidate = join(dir, 'crm.toml')
     if (existsSync(candidate)) {
@@ -207,16 +224,15 @@ export function loadConfig(opts: {
   let config = defaultConfig()
 
   // Resolve config file — auto-create with sensible defaults on first run
-  const configPath =
-    opts.configPath ||
-    process.env.CRM_CONFIG ||
-    findConfigFile(process.cwd()) ||
-    (() => {
-      const root = findProjectRoot(process.cwd())
-      const p = join(root, 'crm.toml')
-      createDefaultConfig(p)
-      return p
-    })()
+  let configPath: string | null =
+    opts.configPath || process.env.CRM_CONFIG || findConfigFile(process.cwd())
+
+  if (!configPath) {
+    const root = findProjectRoot(process.cwd())
+    const p = join(root ?? process.cwd(), 'crm.toml')
+    createDefaultConfig(p)
+    configPath = p
+  }
 
   try {
     const raw = readFileSync(configPath, 'utf-8')

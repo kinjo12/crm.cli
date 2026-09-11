@@ -10,7 +10,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { createTestContext } from './helpers.ts'
+import { createTestContext, initGitRepo } from './helpers.ts'
 
 const CRM_BIN = join(import.meta.dir, '..', 'src', 'cli.ts')
 
@@ -481,8 +481,8 @@ describe('config resolution', () => {
   test('crm.toml in parent directory is found', () => {
     const ctx = createTestContext()
 
-    // ctx.dir is the project root (contains .git) and holds crm.toml.
-    mkdirSync(join(ctx.dir, '.git'))
+    // ctx.dir is the project root (a real git repo) and holds crm.toml.
+    initGitRepo(ctx.dir)
     writeFileSync(
       join(ctx.dir, 'crm.toml'),
       `[pipeline]\nstages = ["parent-1", "parent-2"]\n`,
@@ -515,8 +515,8 @@ describe('config resolution', () => {
   test('crm.toml in grandparent directory is found', () => {
     const ctx = createTestContext()
 
-    // ctx.dir is the project root (contains .git) and holds crm.toml.
-    mkdirSync(join(ctx.dir, '.git'))
+    // ctx.dir is the project root (a real git repo) and holds crm.toml.
+    initGitRepo(ctx.dir)
     writeFileSync(
       join(ctx.dir, 'crm.toml'),
       `[pipeline]\nstages = ["grandparent-1", "grandparent-2"]\n`,
@@ -713,9 +713,10 @@ describe('config resolution: scoped to project directory (security)', () => {
       `[pipeline]\nstages = ["outer-stage"]\n`,
     )
 
-    // The project root sits below it and is marked by .git.
+    // The project root sits below it and is a real git repo.
     const projectDir = join(ctx.dir, 'project')
-    mkdirSync(join(projectDir, '.git'), { recursive: true })
+    mkdirSync(projectDir, { recursive: true })
+    initGitRepo(projectDir)
 
     // The outer/ancestor stage must NOT be visible from inside the project.
     const outerAttempt = Bun.spawnSync(
@@ -758,7 +759,7 @@ describe('config resolution: scoped to project directory (security)', () => {
 
   test('crm.toml at the project root (.git directory) is still found from a subdirectory', () => {
     const ctx = createTestContext({ noConfig: true })
-    mkdirSync(join(ctx.dir, '.git'))
+    initGitRepo(ctx.dir)
     writeFileSync(
       join(ctx.dir, 'crm.toml'),
       `[pipeline]\nstages = ["root-stage"]\n`,
@@ -878,7 +879,8 @@ describe('config resolution: scoped to project directory (security)', () => {
     const ctx = createTestContext({ noConfig: true })
     const fakeHome = mkdtempSync(join(tmpdir(), 'crm-fakehome-'))
     const projectDir = join(ctx.dir, 'project')
-    mkdirSync(join(projectDir, '.git'), { recursive: true })
+    mkdirSync(projectDir, { recursive: true })
+    initGitRepo(projectDir)
 
     const proc = Bun.spawnSync(
       [
@@ -938,6 +940,53 @@ describe('config resolution: scoped to project directory (security)', () => {
     expect(proc.exitCode).toBe(0)
     expect(existsSync(join(projectDir, 'crm.toml'))).toBe(true)
     expect(existsSync(join(fakeHome, '.crm', 'config.toml'))).toBe(false)
+  })
+
+  test('a bare ".git" file (not a real repository) in an ancestor does not establish a trust boundary — hooks are not executed', () => {
+    const ctx = createTestContext({ noConfig: true })
+
+    // Attacker plants a fake ".git" — an arbitrary file, not a real git
+    // repository — plus a malicious crm.toml with a [hooks] entry, in an
+    // ancestor directory (e.g. an extracted archive, a shared drive, $HOME).
+    writeFileSync(join(ctx.dir, '.git'), 'not a real git repository')
+
+    const markerFile = join(ctx.dir, 'pwned.txt').replace(/\\/g, '/')
+    const hookScript = join(ctx.dir, 'hook.js')
+    writeFileSync(
+      hookScript,
+      `require('node:fs').writeFileSync('${markerFile}', 'pwned')\n`,
+    )
+    const hookScriptFwd = hookScript.replace(/\\/g, '/')
+    const hookCmd = `node "${hookScriptFwd}"`
+    writeFileSync(
+      join(ctx.dir, 'crm.toml'),
+      `[hooks]\npost-contact-add = "${hookCmd.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"\n`,
+    )
+
+    // The victim runs the CLI from a subdirectory that has NO real git repo
+    // of its own — a very common situation (ad hoc folder, extracted
+    // archive, shared drive, home directory).
+    const victimDir = join(ctx.dir, 'subproject')
+    mkdirSync(victimDir, { recursive: true })
+
+    Bun.spawnSync(
+      [
+        'bun',
+        'run',
+        CRM_BIN,
+        '--db',
+        ctx.dbPath,
+        'contact',
+        'add',
+        '--name',
+        'Jane',
+      ],
+      { cwd: victimDir, env: { ...process.env, NO_COLOR: '1' } },
+    )
+
+    // The malicious hook must NOT have run — the fake ".git" file must not
+    // be trusted as a project-root boundary.
+    expect(existsSync(join(ctx.dir, 'pwned.txt'))).toBe(false)
   })
 })
 
