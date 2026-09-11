@@ -80,19 +80,18 @@ Config is loaded from `crm.toml`. Resolution order (first match wins):
 
 1. `--config <path>` flag (explicit)
 2. `CRM_CONFIG` env var
-3. Walk up from CWD: `./crm.toml` → `../crm.toml` → `../../crm.toml` → ... → `/crm.toml`
-4. `~/.crm/config.toml` (global fallback)
+3. Walk up from CWD, but never past the current git repository's root: `./crm.toml` → `../crm.toml` → ... → `<repo root>/crm.toml`
+4. If CWD isn't inside a git repository at all, only `./crm.toml` is checked (no upward walk)
 
-This means you can drop a `crm.toml` in your project root and it applies to everyone working in that directory — just like `.gitignore` or `biome.jsonc`.
+There is no global `~/.crm/config.toml` fallback — config is always scoped to the current project. This means you can drop a `crm.toml` in your project root and it applies to everyone working in that directory — just like `.gitignore` or `biome.jsonc`.
 
 ```bash
 # Project-scoped config
 echo '[pipeline]
 stages = ["discovery", "demo", "trial", "closed-won", "closed-lost"]' > ./crm.toml
 
-# Global config (applies everywhere unless overridden)
-mkdir -p ~/.crm
-cat > ~/.crm/config.toml << 'EOF'
+# Full example, placed at the project root
+cat > ./crm.toml << 'EOF'
 [database]
 path = "~/.crm/crm.db"
 
@@ -122,7 +121,7 @@ search_limit = 20                # max results from search/find
 EOF
 ```
 
-Settings in a closer `crm.toml` override the global config. The `--config` flag overrides everything.
+Settings in a closer `crm.toml` override one further up the repo. The `--config` flag overrides everything.
 
 ---
 
@@ -782,7 +781,7 @@ crm contact list --format json | jq '.[] | select(.tags | contains(["hot-lead"])
 
 ### Hooks
 
-Shell commands triggered on mutations. Configured in `~/.crm/config.toml`:
+Shell commands triggered on mutations. Configured in the project's own `crm.toml` (see [Configuration](#configuration) — there is no global config file):
 
 ```toml
 [hooks]

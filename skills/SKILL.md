@@ -30,7 +30,7 @@ crm --version
 
 ## Configuration
 
-Optional. Create `crm.toml` in your project root or `~/.crm/config.toml`:
+Optional. Create `crm.toml` in your project root:
 
 ```toml
 [database]
@@ -52,7 +52,7 @@ display = "international"
 default_path = "~/crm"
 ```
 
-Config is auto-discovered by walking up from the current directory. Override with `--config <path>` or `CRM_CONFIG` env var.
+Config is auto-discovered by walking up from the current directory, but never past the current git repository's root (if CWD isn't inside a git repository, only the current directory is checked). There is no global `~/.crm/config.toml` fallback. Override with `--config <path>` or `CRM_CONFIG` env var.
 
 ## Global Flags
 
@@ -450,7 +450,7 @@ Prefix with `json:` for typed values (numbers, booleans, arrays).
 
 ## Hooks
 
-Configure shell hooks in `crm.toml` that fire on mutations:
+Configure shell hooks in the project's own `crm.toml` that fire on mutations (there is no global config file):
 
 ```toml
 [hooks]
