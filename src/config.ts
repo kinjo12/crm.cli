@@ -58,24 +58,53 @@ function defaultConfig(): CRMConfig {
   }
 }
 
+/**
+ * Find the project root: the nearest ancestor of `startDir` (inclusive) that
+ * contains a `.git` directory. If no ancestor has `.git` (even at the
+ * filesystem root), the project root is `startDir` itself — the narrowest
+ * possible interpretation when project boundaries are unknown.
+ */
+function findProjectRoot(startDir: string): string {
+  let dir = resolve(startDir)
+  while (true) {
+    if (existsSync(join(dir, '.git'))) {
+      return dir
+    }
+    const parent = dirname(dir)
+    if (parent === dir) {
+      return resolve(startDir)
+    }
+    dir = parent
+  }
+}
+
+/**
+ * Search for `crm.toml` starting at `startDir` and walking up parent
+ * directories, but never past the project root (see `findProjectRoot`).
+ * This prevents an unrelated ancestor directory's `crm.toml` — whose
+ * `hooks` are executed without confirmation — from being loaded.
+ *
+ * There is no implicit fallback to a global `~/.crm/config.toml`: if no
+ * `crm.toml` is found within the project, callers fall back to the
+ * built-in default config.
+ */
 function findConfigFile(startDir: string): string | null {
+  const root = findProjectRoot(startDir)
   let dir = resolve(startDir)
   while (true) {
     const candidate = join(dir, 'crm.toml')
     if (existsSync(candidate)) {
       return candidate
     }
+    if (dir === root) {
+      return null
+    }
     const parent = dirname(dir)
     if (parent === dir) {
-      break
+      return null
     }
     dir = parent
   }
-  const global = join(homedir(), '.crm', 'config.toml')
-  if (existsSync(global)) {
-    return global
-  }
-  return null
 }
 
 function mergeConfig(
@@ -183,7 +212,8 @@ export function loadConfig(opts: {
     process.env.CRM_CONFIG ||
     findConfigFile(process.cwd()) ||
     (() => {
-      const p = join(homedir(), '.crm', 'config.toml')
+      const root = findProjectRoot(process.cwd())
+      const p = join(root, 'crm.toml')
       createDefaultConfig(p)
       return p
     })()
