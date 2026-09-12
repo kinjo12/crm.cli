@@ -491,7 +491,9 @@ async function byIndexExists(
 
 // ── readdir ──
 
-async function handleReaddir(
+// Exported for direct testing (bypassing the Unix-socket protocol/live FUSE
+// mount) — see test/fuse-daemon-readdir-security.test.ts.
+export async function handleReaddir(
   db: DB,
   p: string,
   stages: string[],
