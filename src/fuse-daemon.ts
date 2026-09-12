@@ -1096,7 +1096,9 @@ async function handleSearch(
 
 // ── write ──
 
-async function handleWrite(
+// Exported for direct testing (bypassing the Unix-socket protocol/live FUSE
+// mount) — see test/fuse-daemon-write-path-fallback.test.ts.
+export async function handleWrite(
   db: DB,
   config: CRMConfig,
   p: string,
@@ -1223,43 +1225,41 @@ async function writeContact(
   }
 
   if (id) {
-    // Update existing
-    const existing = await db
-      .select()
-      .from(schema.contacts)
-      .where(eq(schema.contacts.id, id))
-    if (!existing[0]) {
+    // Update existing — resolve via the fallback-aware helper (see
+    // findContactById above) since `id` is the sanitized id extracted from
+    // the listed filename, which may differ from the real DB primary key
+    // for a record with an adversarial id.
+    const existing = await findContactById(db, id)
+    if (!existing) {
       return { error: 'ENOENT' }
     }
 
     await db
       .update(schema.contacts)
       .set({
-        name: (data.name as string) || existing[0].name,
-        emails: JSON.stringify(emails || safeJSON(existing[0].emails)),
-        phones: JSON.stringify(phones || safeJSON(existing[0].phones)),
-        companies: JSON.stringify(companies ?? safeJSON(existing[0].companies)),
+        name: (data.name as string) || existing.name,
+        emails: JSON.stringify(emails || safeJSON(existing.emails)),
+        phones: JSON.stringify(phones || safeJSON(existing.phones)),
+        companies: JSON.stringify(companies ?? safeJSON(existing.companies)),
         linkedin:
           data.linkedin === undefined
-            ? existing[0].linkedin
+            ? existing.linkedin
             : (data.linkedin as string),
-        x: data.x === undefined ? existing[0].x : (data.x as string),
+        x: data.x === undefined ? existing.x : (data.x as string),
         bluesky:
           data.bluesky === undefined
-            ? existing[0].bluesky
+            ? existing.bluesky
             : (data.bluesky as string),
         telegram:
           data.telegram === undefined
-            ? existing[0].telegram
+            ? existing.telegram
             : (data.telegram as string),
         tags:
-          data.tags === undefined
-            ? existing[0].tags
-            : JSON.stringify(data.tags),
+          data.tags === undefined ? existing.tags : JSON.stringify(data.tags),
         custom_fields: cfStr,
         updated_at: now,
       })
-      .where(eq(schema.contacts.id, id))
+      .where(eq(schema.contacts.id, existing.id))
 
     return { ok: true }
   }
@@ -1349,27 +1349,24 @@ async function writeCompany(
   const now = new Date().toISOString()
 
   if (id) {
-    const existing = await db
-      .select()
-      .from(schema.companies)
-      .where(eq(schema.companies.id, id))
-    if (!existing[0]) {
+    // Resolve via the fallback-aware helper — see findContactById above for
+    // why `id` alone (the sanitized id from the filename) isn't sufficient.
+    const existing = await findCompanyById(db, id)
+    if (!existing) {
       return { error: 'ENOENT' }
     }
     await db
       .update(schema.companies)
       .set({
-        name: (data.name as string) || existing[0].name,
-        websites: JSON.stringify(websites || safeJSON(existing[0].websites)),
-        phones: JSON.stringify(phones || safeJSON(existing[0].phones)),
+        name: (data.name as string) || existing.name,
+        websites: JSON.stringify(websites || safeJSON(existing.websites)),
+        phones: JSON.stringify(phones || safeJSON(existing.phones)),
         tags:
-          data.tags === undefined
-            ? existing[0].tags
-            : JSON.stringify(data.tags),
+          data.tags === undefined ? existing.tags : JSON.stringify(data.tags),
         custom_fields: cfStr,
         updated_at: now,
       })
-      .where(eq(schema.companies.id, id))
+      .where(eq(schema.companies.id, existing.id))
     return { ok: true }
   }
 
@@ -1408,22 +1405,21 @@ async function writeDeal(
   const now = new Date().toISOString()
 
   if (id) {
-    const existing = await db
-      .select()
-      .from(schema.deals)
-      .where(eq(schema.deals.id, id))
-    if (!existing[0]) {
+    // Resolve via the fallback-aware helper — see findContactById above for
+    // why `id` alone (the sanitized id from the filename) isn't sufficient.
+    const existing = await findDealById(db, id)
+    if (!existing) {
       return { error: 'ENOENT' }
     }
 
     // Track stage change
-    if (data.stage && data.stage !== existing[0].stage) {
+    if (data.stage && data.stage !== existing.stage) {
       const acId = makeId('ac')
       await db.insert(schema.activities).values({
         id: acId,
         type: 'stage-change',
-        body: `from ${existing[0].stage} to ${data.stage}`,
-        deal: id,
+        body: `from ${existing.stage} to ${data.stage}`,
+        deal: existing.id,
         contacts: '[]',
         company: null,
         custom_fields: '{}',
@@ -1434,13 +1430,13 @@ async function writeDeal(
     await db
       .update(schema.deals)
       .set({
-        title: (data.title as string) || existing[0].title,
+        title: (data.title as string) || existing.title,
         value:
-          data.value === undefined ? existing[0].value : (data.value as number),
-        stage: (data.stage as string) || existing[0].stage,
+          data.value === undefined ? existing.value : (data.value as number),
+        stage: (data.stage as string) || existing.stage,
         contacts:
           data.contacts === undefined
-            ? existing[0].contacts
+            ? existing.contacts
             : JSON.stringify(
                 Array.isArray(data.contacts)
                   ? (data.contacts as unknown[]).map((c: unknown) =>
@@ -1452,27 +1448,25 @@ async function writeDeal(
               ),
         company:
           data.company === undefined
-            ? existing[0].company
+            ? existing.company
             : extractCompanyId(data.company),
         expected_close:
           data.expected_close === undefined
-            ? existing[0].expected_close
+            ? existing.expected_close
             : (data.expected_close as string),
         probability:
           data.probability === undefined
-            ? existing[0].probability
+            ? existing.probability
             : (data.probability as number),
         tags:
-          data.tags === undefined
-            ? existing[0].tags
-            : JSON.stringify(data.tags),
+          data.tags === undefined ? existing.tags : JSON.stringify(data.tags),
         custom_fields:
           data.custom_fields === undefined
-            ? existing[0].custom_fields
+            ? existing.custom_fields
             : JSON.stringify(data.custom_fields),
         updated_at: now,
       })
-      .where(eq(schema.deals.id, id))
+      .where(eq(schema.deals.id, existing.id))
 
     return { ok: true }
   }
