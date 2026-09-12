@@ -1562,6 +1562,51 @@ async function handleUnlink(
   return { error: 'EPERM' }
 }
 
+// ── Newline-delimited line buffering (binary-safe) ──
+
+// Accumulates raw socket bytes and yields complete newline-delimited lines.
+//
+// This operates on Buffers and splits on the raw byte 0x0A (`\n`) rather than
+// decoding each incoming chunk to a string with `Buffer.toString()` and
+// concatenating strings. Decoding independently per-chunk is unsafe for a
+// byte-oriented streaming protocol: a multi-byte UTF-8 sequence can be split
+// across a chunk boundary by the OS/kernel at any byte offset, and decoding
+// each half separately produces mangled output (U+FFFD replacement
+// characters) even though the original bytes, once fully assembled, form
+// valid UTF-8. Buffering as bytes and decoding only once a full line has
+// been assembled makes this correct regardless of how the transport chooses
+// to fragment the stream.
+//
+// Exported for direct unit testing — see test/fuse-daemon-line-buffer.test.ts.
+export class LineBuffer {
+  private chunks: Buffer[] = []
+
+  // Feed a raw chunk and return zero or more complete, decoded lines
+  // (newline stripped). Any trailing partial line is retained internally
+  // until the rest of it arrives in a subsequent chunk.
+  push(chunk: Buffer): string[] {
+    this.chunks.push(chunk)
+
+    const combined =
+      this.chunks.length === 1 ? this.chunks[0] : Buffer.concat(this.chunks)
+
+    const lines: string[] = []
+    let start = 0
+    for (;;) {
+      const newlineIdx = combined.indexOf(0x0a, start)
+      if (newlineIdx === -1) {
+        break
+      }
+      lines.push(combined.toString('utf-8', start, newlineIdx))
+      start = newlineIdx + 1
+    }
+
+    this.chunks = start < combined.length ? [combined.subarray(start)] : []
+
+    return lines
+  }
+}
+
 // ── Main: start Unix socket server ──
 
 export async function startDaemon(daemonArgs: string[]) {
@@ -1598,17 +1643,10 @@ export async function startDaemon(daemonArgs: string[]) {
   config.database.path = dbPath
 
   const server = createServer((conn: Socket) => {
-    let buffer = ''
+    const lineBuffer = new LineBuffer()
 
-    conn.on('data', (chunk) => {
-      buffer += chunk.toString()
-      for (;;) {
-        const newlineIdx = buffer.indexOf('\n')
-        if (newlineIdx === -1) {
-          break
-        }
-        const line = buffer.slice(0, newlineIdx)
-        buffer = buffer.slice(newlineIdx + 1)
+    conn.on('data', (chunk: Buffer) => {
+      for (const line of lineBuffer.push(chunk)) {
         if (line.trim()) {
           processLine(conn, db, config, stages, line)
         }
