@@ -183,6 +183,36 @@ static int json_escape(char *buf, size_t maxlen, const char *s) {
     return p;
 }
 
+/*
+ * Build a request of the form {"op":"<op>","path":"<escaped path>"}.
+ * Used by getattr/readdir/read/unlink, whose requests only ever interpolate
+ * `path` (never raw — always through json_escape()). `path` comes straight
+ * from the kernel and, per FUSE semantics, may contain any byte except NUL
+ * and '/' (including '"', '\', and control characters), so it must never be
+ * interpolated unescaped into the JSON we hand-build here.
+ *
+ * The buffer is sized dynamically off strlen(path) rather than using a
+ * fixed-size stack buffer: json_escape() can expand its input by up to
+ * ~2x+2 bytes (every character escaped), so a fixed buffer could overflow
+ * or silently truncate a long or heavily-quoted path into a different,
+ * valid-but-wrong request.
+ *
+ * Returns a malloc'd string (caller must free), or NULL on allocation
+ * failure.
+ */
+static char *build_path_request(const char *op, const char *path) {
+    size_t path_escaped_max = strlen(path) * 2 + 3; /* worst case: every byte escaped, plus quotes */
+    size_t reqsize = strlen(op) + path_escaped_max + 128;
+    char *req = malloc(reqsize);
+    if (!req) return NULL;
+
+    int rp = 0;
+    rp += snprintf(req + rp, reqsize - rp, "{\"op\":\"%s\",\"path\":", op);
+    rp += json_escape(req + rp, reqsize - rp, path);
+    snprintf(req + rp, reqsize - rp, "}");
+    return req;
+}
+
 static char **json_get_entries(const char *json, int *count) {
     *count = 0;
     const char *v = json_find_key(json, "entries");
@@ -278,10 +308,11 @@ static int crm_getattr(const char *path, struct stat *stbuf,
     (void)fi;
     memset(stbuf, 0, sizeof(struct stat));
 
-    char req[8192];
-    snprintf(req, sizeof(req), "{\"op\":\"getattr\",\"path\":\"%s\"}", path);
+    char *req = build_path_request("getattr", path);
+    if (!req) return -ENOMEM;
 
     char *resp = sock_request(req);
+    free(req);
     if (!resp) return -EIO;
 
     if (json_has_error(resp)) {
@@ -311,10 +342,11 @@ static int crm_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     filler(buf, ".", NULL, 0, 0);
     filler(buf, "..", NULL, 0, 0);
 
-    char req[8192];
-    snprintf(req, sizeof(req), "{\"op\":\"readdir\",\"path\":\"%s\"}", path);
+    char *req = build_path_request("readdir", path);
+    if (!req) return -ENOMEM;
 
     char *resp = sock_request(req);
+    free(req);
     if (!resp) return -EIO;
 
     if (json_has_error(resp)) {
@@ -351,10 +383,11 @@ static int crm_read(const char *path, char *buf, size_t size, off_t offset,
                      struct fuse_file_info *fi) {
     (void)fi;
 
-    char req[8192];
-    snprintf(req, sizeof(req), "{\"op\":\"read\",\"path\":\"%s\"}", path);
+    char *req = build_path_request("read", path);
+    if (!req) return -ENOMEM;
 
     char *resp = sock_request(req);
+    free(req);
     if (!resp) return -EIO;
 
     if (json_has_error(resp)) {
@@ -437,8 +470,9 @@ static int crm_write(const char *path, const char *data, size_t size,
     /* Send data to daemon immediately for validation + persistence.
      * Bun's writeFileSync doesn't check close() errors, so we must
      * validate here in the write() syscall where errors propagate. */
+    size_t path_escaped_max = strlen(path) * 2 + 3;
     size_t data_escaped_max = wb->len * 2 + 3;
-    size_t reqsize = strlen(path) + data_escaped_max + 128;
+    size_t reqsize = path_escaped_max + data_escaped_max + 128;
     char *req = malloc(reqsize);
     if (!req) {
         pthread_mutex_unlock(&g_write_mutex);
@@ -446,7 +480,9 @@ static int crm_write(const char *path, const char *data, size_t size,
     }
 
     int rp = 0;
-    rp += snprintf(req + rp, reqsize - rp, "{\"op\":\"write\",\"path\":\"%s\",\"data\":", path);
+    rp += snprintf(req + rp, reqsize - rp, "{\"op\":\"write\",\"path\":");
+    rp += json_escape(req + rp, reqsize - rp, path);
+    rp += snprintf(req + rp, reqsize - rp, ",\"data\":");
     rp += json_escape(req + rp, reqsize - rp, wb->data);
     rp += snprintf(req + rp, reqsize - rp, "}");
 
@@ -488,8 +524,9 @@ static int crm_flush(const char *path, struct fuse_file_info *fi) {
     }
 
     /* Send uncommitted data to daemon (fallback for multi-chunk writes) */
+    size_t path_escaped_max = strlen(path) * 2 + 3;
     size_t data_escaped_max = wb->len * 2 + 3;
-    size_t reqsize = strlen(path) + data_escaped_max + 128;
+    size_t reqsize = path_escaped_max + data_escaped_max + 128;
     char *req = malloc(reqsize);
     if (!req) {
         pthread_mutex_unlock(&g_write_mutex);
@@ -497,7 +534,9 @@ static int crm_flush(const char *path, struct fuse_file_info *fi) {
     }
 
     int rp = 0;
-    rp += snprintf(req + rp, reqsize - rp, "{\"op\":\"write\",\"path\":\"%s\",\"data\":", path);
+    rp += snprintf(req + rp, reqsize - rp, "{\"op\":\"write\",\"path\":");
+    rp += json_escape(req + rp, reqsize - rp, path);
+    rp += snprintf(req + rp, reqsize - rp, ",\"data\":");
     rp += json_escape(req + rp, reqsize - rp, wb->data);
     rp += snprintf(req + rp, reqsize - rp, "}");
 
@@ -530,10 +569,11 @@ static int crm_release(const char *path, struct fuse_file_info *fi) {
 }
 
 static int crm_unlink(const char *path) {
-    char req[8192];
-    snprintf(req, sizeof(req), "{\"op\":\"unlink\",\"path\":\"%s\"}", path);
+    char *req = build_path_request("unlink", path);
+    if (!req) return -ENOMEM;
 
     char *resp = sock_request(req);
+    free(req);
     if (!resp) return -EIO;
 
     if (json_has_error(resp)) {
