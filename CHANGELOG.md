@@ -42,5 +42,3 @@ mirror upstream's own release history.
   trusted (by content hash) before its hooks are allowed to run. See
   [SECURITY.md](SECURITY.md#1-unscoped-crmtoml-resolution-and-unconditional-hook-execution)
   for details. (#1)
-
-[Unreleased]: https://github.com/kinjo12/crm.cli/compare/v0.3.10...HEAD
