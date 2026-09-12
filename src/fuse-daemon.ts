@@ -34,6 +34,9 @@ import {
   buildCompanyJSON,
   buildContactJSON,
   buildDealJSON,
+  companyFilename,
+  contactFilename,
+  dealFilename,
   LLM_TXT,
   slugify,
 } from './fuse-json'
@@ -491,7 +494,9 @@ async function byIndexExists(
 
 // ── readdir ──
 
-async function handleReaddir(
+// Exported for direct testing (bypassing the Unix-socket protocol/live FUSE
+// mount) — see test/fuse-daemon-readdir-security.test.ts.
+export async function handleReaddir(
   db: DB,
   p: string,
   stages: string[],
@@ -514,7 +519,7 @@ async function handleReaddir(
 
   if (p === 'contacts') {
     const contacts = await db.select().from(schema.contacts)
-    const files = contacts.map((c) => `${c.id}...${slugify(c.name || '')}.json`)
+    const files = contacts.map((c) => contactFilename(c))
     return {
       entries: [
         '_by-email',
@@ -532,9 +537,7 @@ async function handleReaddir(
 
   if (p === 'companies') {
     const companies = await db.select().from(schema.companies)
-    const files = companies.map(
-      (co) => `${co.id}...${slugify(co.name || '')}.json`,
-    )
+    const files = companies.map((co) => companyFilename(co))
     return {
       entries: ['_by-website', '_by-phone', '_by-tag', ...files],
     }
@@ -542,7 +545,7 @@ async function handleReaddir(
 
   if (p === 'deals') {
     const deals = await db.select().from(schema.deals)
-    const files = deals.map((d) => `${d.id}...${slugify(d.title || '')}.json`)
+    const files = deals.map((d) => dealFilename(d))
     return {
       entries: ['_by-stage', '_by-company', '_by-tag', ...files],
     }
@@ -586,7 +589,7 @@ async function handleReaddir(
         .from(schema.deals)
         .where(eq(schema.deals.stage, stage))
       return {
-        entries: deals.map((d) => `${d.id}...${slugify(d.title || '')}.json`),
+        entries: deals.map((d) => dealFilename(d)),
       }
     }
   }
@@ -643,7 +646,7 @@ async function handleReaddir(
       const all = await db.select().from(schema.contacts)
       const entries = all
         .filter((c) => (safeJSON(c.tags) as string[]).includes(tag))
-        .map((c) => `${c.id}...${slugify(c.name || '')}.json`)
+        .map((c) => contactFilename(c))
       return { entries }
     }
   }
@@ -678,7 +681,7 @@ async function handleReaddir(
             return co && slugify(co.name) === cslug
           })
         })
-        .map((c) => `${c.id}...${slugify(c.name || '')}.json`)
+        .map((c) => contactFilename(c))
       return { entries }
     }
   }
