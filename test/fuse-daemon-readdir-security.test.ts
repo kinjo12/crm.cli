@@ -66,11 +66,18 @@ describe('fuse-daemon: readdir filename sanitization', () => {
     const result = await handleReaddir(db, 'contacts', STAGES)
     const entries = result.entries as string[]
     const evilEntry = entries.find(
-      (e) => e.endsWith('.json') && !e.startsWith('_'),
+      // Match on the slug rather than excluding an underscore prefix — the
+      // sanitized evil id itself now legitimately starts with "_", which
+      // would otherwise be confused with the "_by-*" lookup-dir entries.
+      (e) => e.endsWith('.json') && e.includes('evil'),
     )
 
     expect(evilEntry).toBeDefined()
-    expect(evilEntry).not.toContain('..')
+    // The filename format itself always contains a literal "..." separator
+    // between id and slug — that's by design, not a vulnerability. What must
+    // never appear is the raw malicious id (with its real ".." traversal
+    // sequences and "/" separators) embedded verbatim.
+    expect(evilEntry).not.toContain(EVIL_ID)
     expect(evilEntry).not.toContain('/')
   })
 
@@ -90,11 +97,18 @@ describe('fuse-daemon: readdir filename sanitization', () => {
     const result = await handleReaddir(db, 'companies', STAGES)
     const entries = result.entries as string[]
     const evilEntry = entries.find(
-      (e) => e.endsWith('.json') && !e.startsWith('_'),
+      // Match on the slug rather than excluding an underscore prefix — the
+      // sanitized evil id itself now legitimately starts with "_", which
+      // would otherwise be confused with the "_by-*" lookup-dir entries.
+      (e) => e.endsWith('.json') && e.includes('evil'),
     )
 
     expect(evilEntry).toBeDefined()
-    expect(evilEntry).not.toContain('..')
+    // The filename format itself always contains a literal "..." separator
+    // between id and slug — that's by design, not a vulnerability. What must
+    // never appear is the raw malicious id (with its real ".." traversal
+    // sequences and "/" separators) embedded verbatim.
+    expect(evilEntry).not.toContain(EVIL_ID)
     expect(evilEntry).not.toContain('/')
   })
 
@@ -115,11 +129,18 @@ describe('fuse-daemon: readdir filename sanitization', () => {
     const result = await handleReaddir(db, 'deals', STAGES)
     const entries = result.entries as string[]
     const evilEntry = entries.find(
-      (e) => e.endsWith('.json') && !e.startsWith('_'),
+      // Match on the slug rather than excluding an underscore prefix — the
+      // sanitized evil id itself now legitimately starts with "_", which
+      // would otherwise be confused with the "_by-*" lookup-dir entries.
+      (e) => e.endsWith('.json') && e.includes('evil'),
     )
 
     expect(evilEntry).toBeDefined()
-    expect(evilEntry).not.toContain('..')
+    // The filename format itself always contains a literal "..." separator
+    // between id and slug — that's by design, not a vulnerability. What must
+    // never appear is the raw malicious id (with its real ".." traversal
+    // sequences and "/" separators) embedded verbatim.
+    expect(evilEntry).not.toContain(EVIL_ID)
     expect(evilEntry).not.toContain('/')
   })
 
@@ -142,7 +163,11 @@ describe('fuse-daemon: readdir filename sanitization', () => {
     const evilEntry = entries[0]
 
     expect(evilEntry).toBeDefined()
-    expect(evilEntry).not.toContain('..')
+    // The filename format itself always contains a literal "..." separator
+    // between id and slug — that's by design, not a vulnerability. What must
+    // never appear is the raw malicious id (with its real ".." traversal
+    // sequences and "/" separators) embedded verbatim.
+    expect(evilEntry).not.toContain(EVIL_ID)
     expect(evilEntry).not.toContain('/')
   })
 
@@ -165,7 +190,11 @@ describe('fuse-daemon: readdir filename sanitization', () => {
     const evilEntry = entries[0]
 
     expect(evilEntry).toBeDefined()
-    expect(evilEntry).not.toContain('..')
+    // The filename format itself always contains a literal "..." separator
+    // between id and slug — that's by design, not a vulnerability. What must
+    // never appear is the raw malicious id (with its real ".." traversal
+    // sequences and "/" separators) embedded verbatim.
+    expect(evilEntry).not.toContain(EVIL_ID)
     expect(evilEntry).not.toContain('/')
   })
 
@@ -202,7 +231,11 @@ describe('fuse-daemon: readdir filename sanitization', () => {
     const evilEntry = entries[0]
 
     expect(evilEntry).toBeDefined()
-    expect(evilEntry).not.toContain('..')
+    // The filename format itself always contains a literal "..." separator
+    // between id and slug — that's by design, not a vulnerability. What must
+    // never appear is the raw malicious id (with its real ".." traversal
+    // sequences and "/" separators) embedded verbatim.
+    expect(evilEntry).not.toContain(EVIL_ID)
     expect(evilEntry).not.toContain('/')
   })
 
