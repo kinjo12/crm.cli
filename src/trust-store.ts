@@ -39,9 +39,13 @@ function canonicalPath(configPath: string): string {
   }
 }
 
-function hashFile(configPath: string): string {
-  const contents = readFileSync(configPath)
+/** Hash already-read file bytes. See `hashFile` for the read+hash variant. */
+export function hashBuffer(contents: Buffer): string {
   return createHash('sha256').update(contents).digest('hex')
+}
+
+function hashFile(configPath: string): string {
+  return hashBuffer(readFileSync(configPath))
 }
 
 function loadTrustStore(): TrustStoreData {
@@ -86,8 +90,37 @@ export function isTrusted(configPath: string): boolean {
 
 /** Record `configPath`'s current content hash as trusted. */
 export function trustConfig(configPath: string): void {
+  trustConfigContent(configPath, readFileSync(configPath))
+}
+
+/**
+ * Whether `contents` (bytes already read by the caller) matches a
+ * previously recorded trust entry for `configPath`. Unlike `isTrusted`,
+ * this performs no file I/O of its own — callers that need the trust
+ * decision and the executed content to come from the exact same read
+ * (e.g. the hooks TOCTOU gate in hooks.ts) should read the file once and
+ * pass those bytes here rather than calling `isTrusted`, which re-reads
+ * the file independently.
+ */
+export function isTrustedContent(
+  configPath: string,
+  contents: Buffer,
+): boolean {
   const store = loadTrustStore()
-  store[canonicalPath(configPath)] = hashFile(configPath)
+  const trustedHash = store[canonicalPath(configPath)]
+  if (!trustedHash) {
+    return false
+  }
+  return hashBuffer(contents) === trustedHash
+}
+
+/**
+ * Record already-read `contents` as the trusted content for `configPath`.
+ * See `isTrustedContent` for why callers may want this over `trustConfig`.
+ */
+export function trustConfigContent(configPath: string, contents: Buffer): void {
+  const store = loadTrustStore()
+  store[canonicalPath(configPath)] = hashBuffer(contents)
   saveTrustStore(store)
 }
 
