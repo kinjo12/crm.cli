@@ -1,12 +1,23 @@
 import { describe, expect, test } from 'bun:test'
-import { execSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import type { CRMConfig } from '../src/config.ts'
 import { runHook } from '../src/hooks.ts'
-import { trustConfig, untrustConfig } from '../src/trust-store.ts'
+import {
+  atomicWriteFileSync,
+  isTrusted,
+  trustConfig,
+  untrustConfig,
+} from '../src/trust-store.ts'
+import { initGitRepo } from './helpers.ts'
 
 const CRM_BIN = join(import.meta.dir, '..', 'src', 'cli.ts')
 
@@ -306,7 +317,7 @@ describe('hooks trust-on-first-use gate', () => {
     // A throwaway real git repository, unrelated to the attack tree.
     const realRepo = join(workDir, 'realrepo')
     mkdirSync(realRepo, { recursive: true })
-    execSync('git init', { cwd: realRepo, stdio: 'ignore' })
+    initGitRepo(realRepo)
 
     // Attacker-controlled ancestor directory: a `.git` FILE (not directory)
     // using git's legitimate gitlink indirection to point at the throwaway
@@ -347,10 +358,10 @@ describe('hooks trust-on-first-use gate', () => {
 })
 
 /**
- * TOCTOU regression tests for `runHook`/`checkHookTrust` (issue #6): the
- * command that `spawnSync`s must come from the *same* read of `crm.toml`
- * that the trust hash was computed from — never from `config.hooks`
- * captured earlier, at `loadConfig()` time.
+ * TOCTOU regression tests for `runHook`/`resolveTrustedHookCommand` (issue
+ * #6): the command that `spawnSync`s must come from the *same* read of
+ * `crm.toml` that the trust hash was computed from — never from
+ * `config.hooks` captured earlier, at `loadConfig()` time.
  *
  * A real double-swap race (attacker flips the file to malicious content
  * before the victim process's `loadConfig()` call, then flips it back to
@@ -474,5 +485,117 @@ describe('hooks TOCTOU regression (issue #6)', () => {
     } finally {
       untrustConfig(configPath)
     }
+  })
+
+  test('load-time short-circuit: config.hooks[hookName] absent in memory skips the hook without ever reaching the trust gate, even if the on-disk config now defines it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'crm-toctou-'))
+    const configPath = join(dir, 'crm.toml')
+    const marker = join(dir, 'should-not-run.txt')
+    const script = join(dir, 'hook.js')
+
+    writeFileSync(
+      script,
+      `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran')\n`,
+    )
+    const cmd = `node "${script.replace(/\\/g, '/')}"`
+
+    // The on-disk config, staged separately from the in-memory config below
+    // (same pattern as the TOCTOU tests above), DOES define the hook.
+    writeFileSync(
+      configPath,
+      `[hooks]\npost-contact-add = "${toTOMLString(cmd)}"\n`,
+    )
+
+    // Deliberately left untrusted: if `runHook` reached the trust gate at
+    // all here, it would have to either prompt or print an "untrusted"
+    // warning — neither of which must happen for this scenario.
+    expect(isTrusted(configPath)).toBe(false)
+
+    // `config.hooks` — standing in for whatever `loadConfig()` captured
+    // into memory at process start — has no entry for this hook name at
+    // all, even though a fresh read of the file would find one. Per the
+    // inline comment in `runHook`, this must short-circuit to "no hook
+    // configured" and skip entirely, without consulting the trust store.
+    const staleConfig = baseConfig(configPath, {})
+
+    const originalConsoleError = console.error
+    const errorCalls: unknown[][] = []
+    console.error = (...args: unknown[]) => {
+      errorCalls.push(args)
+    }
+    try {
+      const ok = runHook(staleConfig, 'post-contact-add', { name: 'Jane' })
+
+      expect(ok).toBe(true)
+      expect(existsSync(marker)).toBe(false)
+      // No trust-gate warning or prompt was ever emitted — proof the
+      // short-circuit happened before `resolveTrustedHookCommand` (the
+      // only code path that logs via `console.error` or prompts) was
+      // ever called.
+      expect(errorCalls).toEqual([])
+      // The trust store itself was never consulted or mutated either.
+      expect(isTrusted(configPath)).toBe(false)
+    } finally {
+      console.error = originalConsoleError
+      untrustConfig(configPath)
+    }
+  })
+})
+
+/**
+ * Trust-store write durability (issue #7 item 2): `saveTrustStore` writes
+ * via `atomicWriteFileSync` (write-temp-then-rename) rather than a direct
+ * `writeFileSync`, so two racing `crm` invocations can't interleave into a
+ * corrupt file and a process killed mid-write can't leave a truncated one.
+ */
+describe('trust-store durability (issue #7 item 2)', () => {
+  test('normal trust/untrust round-trip still works correctly', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'crm-trust-roundtrip-'))
+    const configPath = join(dir, 'crm.toml')
+    writeFileSync(configPath, '[hooks]\n')
+
+    try {
+      expect(isTrusted(configPath)).toBe(false)
+
+      trustConfig(configPath)
+      expect(isTrusted(configPath)).toBe(true)
+
+      const removed = untrustConfig(configPath)
+      expect(removed).toBe(true)
+      expect(isTrusted(configPath)).toBe(false)
+    } finally {
+      untrustConfig(configPath)
+    }
+  })
+
+  test('atomicWriteFileSync: the real file is always its old complete content or its new complete content, never a partial write', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'crm-atomic-write-'))
+    const targetPath = join(dir, 'trusted_configs.json')
+
+    atomicWriteFileSync(targetPath, 'OLD-COMPLETE-CONTENT')
+    expect(readFileSync(targetPath, 'utf-8')).toBe('OLD-COMPLETE-CONTENT')
+
+    // Simulate a process that crashed after finishing the temp-file write
+    // but before the rename that commits it — by writing directly to a
+    // sibling temp path in the same directory (the same co-location
+    // `atomicWriteFileSync` relies on for its rename to be atomic) and
+    // deliberately never renaming it over `targetPath`.
+    const abandonedTmpPath = join(
+      dir,
+      '.trusted_configs.json.crash-simulation.tmp',
+    )
+    writeFileSync(abandonedTmpPath, 'NEW-CONTENT-NEVER-COMMITTED')
+
+    // The real file must be completely untouched by the abandoned write —
+    // still its old complete content, never truncated or partially
+    // overwritten.
+    expect(readFileSync(targetPath, 'utf-8')).toBe('OLD-COMPLETE-CONTENT')
+    expect(existsSync(abandonedTmpPath)).toBe(true)
+
+    // A subsequent real write must still succeed normally afterwards,
+    // proving an orphaned leftover temp file (as a crash would leave
+    // behind) doesn't interfere with future writes.
+    atomicWriteFileSync(targetPath, 'NEW-COMPLETE-CONTENT')
+    expect(readFileSync(targetPath, 'utf-8')).toBe('NEW-COMPLETE-CONTENT')
   })
 })

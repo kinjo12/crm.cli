@@ -525,7 +525,7 @@ describe('config resolution', () => {
       [
         'bun',
         'run',
-        join(import.meta.dir, '..', 'src', 'cli.ts'),
+        CRM_BIN,
         '--db',
         ctx.dbPath,
         'deal',
@@ -558,7 +558,7 @@ describe('config resolution', () => {
       [
         'bun',
         'run',
-        join(import.meta.dir, '..', 'src', 'cli.ts'),
+        CRM_BIN,
         '--db',
         ctx.dbPath,
         'deal',
@@ -595,7 +595,7 @@ describe('config resolution', () => {
       [
         'bun',
         'run',
-        join(import.meta.dir, '..', 'src', 'cli.ts'),
+        CRM_BIN,
         '--db',
         ctx.dbPath,
         'deal',
@@ -614,7 +614,7 @@ describe('config resolution', () => {
       [
         'bun',
         'run',
-        join(import.meta.dir, '..', 'src', 'cli.ts'),
+        CRM_BIN,
         '--db',
         ctx.dbPath,
         'deal',
@@ -714,15 +714,7 @@ describe('config resolution', () => {
 
     // Run without --db flag — should use config's database path.
     const proc = Bun.spawnSync(
-      [
-        'bun',
-        'run',
-        join(import.meta.dir, '..', 'src', 'cli.ts'),
-        'contact',
-        'add',
-        '--name',
-        'Jane',
-      ],
+      ['bun', 'run', CRM_BIN, 'contact', 'add', '--name', 'Jane'],
       { cwd: ctx.dir, env: { ...process.env, NO_COLOR: '1' } },
     )
     expect(proc.exitCode).toBe(0)
@@ -1085,7 +1077,7 @@ describe('config: malformed TOML warning', () => {
       [
         'bun',
         'run',
-        join(import.meta.dir, '..', 'src', 'cli.ts'),
+        CRM_BIN,
         '--config',
         configPath,
         '--db',
