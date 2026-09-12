@@ -38,6 +38,15 @@ export type ConfigSource = 'explicit' | 'implicit' | 'none'
 
 export interface ConfigResolution {
   path: string | null
+  /**
+   * The project root `findConfigFile` already computed while searching for
+   * `crm.toml` (via `findProjectRoot`), when resolution was implicit and
+   * found nothing. Exposed purely so `loadConfig`'s no-config-found
+   * fallback can reuse it instead of shelling out to `git rev-parse` a
+   * second time; `undefined` for explicit/found resolutions, which never
+   * need it.
+   */
+  root?: string | null
   source: ConfigSource
 }
 
@@ -101,20 +110,23 @@ function findProjectRoot(startDir: string): string | null {
 
 /**
  * Search for `crm.toml` starting at `startDir` and walking up parent
- * directories, but never past the project root (see `findProjectRoot`).
- * This prevents an unrelated ancestor directory's `crm.toml` — whose
- * `hooks` are executed without confirmation — from being loaded.
+ * directories, but never past `root` (the project root — see
+ * `findProjectRoot`, which callers must compute and pass in; hoisted out of
+ * this function so callers that need the root for other purposes, e.g.
+ * `loadConfig`'s no-config-found fallback, don't have to recompute it via a
+ * second `git rev-parse` shell-out). This prevents an unrelated ancestor
+ * directory's `crm.toml` — whose `hooks` are executed without confirmation
+ * — from being loaded.
  *
- * If `startDir` isn't inside a real git repository, there is no known
- * project boundary, so only `startDir` itself is checked — never walking
- * upward toward the filesystem root.
+ * If `root` is `null`, `startDir` isn't inside a real git repository, so
+ * there is no known project boundary and only `startDir` itself is checked
+ * — never walking upward toward the filesystem root.
  *
  * There is no implicit fallback to a global `~/.crm/config.toml`: if no
  * `crm.toml` is found within the project, callers fall back to the
  * built-in default config.
  */
-function findConfigFile(startDir: string): string | null {
-  const root = findProjectRoot(startDir)
+function findConfigFile(startDir: string, root: string | null): string | null {
   const start = resolve(startDir)
 
   if (root === null) {
@@ -151,11 +163,12 @@ export function resolveConfigPath(explicitPath?: string): ConfigResolution {
   if (explicit) {
     return { path: resolve(explicit), source: 'explicit' }
   }
-  const found = findConfigFile(process.cwd())
+  const root = findProjectRoot(process.cwd())
+  const found = findConfigFile(process.cwd(), root)
   if (found) {
     return { path: found, source: 'implicit' }
   }
-  return { path: null, source: 'none' }
+  return { path: null, source: 'none', root }
 }
 
 function mergeConfig(
@@ -263,7 +276,17 @@ export function loadConfig(opts: {
   let source: ConfigSource = resolved.source
 
   if (!configPath) {
-    const root = findProjectRoot(process.cwd())
+    // `resolveConfigPath` already computed this root while searching for an
+    // implicit config and found none (source === 'none' whenever
+    // `!configPath`), so `resolved.root` is always set here — reuse it
+    // instead of shelling out to `git rev-parse` again. Note: `root` can
+    // legitimately be `null` (no git repo found), which is distinct from
+    // `undefined` (not computed) — a `??` fallback here would wrongly
+    // recompute in that legitimate-null, most-common-first-run case.
+    const root =
+      resolved.root === undefined
+        ? findProjectRoot(process.cwd())
+        : resolved.root
     const p = join(root ?? process.cwd(), 'crm.toml')
     try {
       createDefaultConfig(p)
