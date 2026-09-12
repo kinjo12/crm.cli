@@ -215,9 +215,15 @@ export async function generateFS(
     writeJSON(filePath, data)
 
     if (d.stage) {
-      const stageDir = join(outDir, 'deals', '_by-stage', d.stage)
-      ensureDir(stageDir)
-      copyFileSync(filePath, join(stageDir, filename))
+      // `d.stage` is validated against config.pipeline.stages by `deal
+      // add`/`update`, but `crm import deals` accepts any trimmed string
+      // (src/commands/importexport.ts) without that check, so it must be
+      // treated as untrusted here too.
+      const stageDir = safeJoin(outDir, 'deals', '_by-stage', d.stage)
+      if (stageDir) {
+        ensureDir(stageDir)
+        copyFileSync(filePath, join(stageDir, filename))
+      }
     }
 
     if (d.company) {

@@ -225,6 +225,22 @@ describe('export-fs: path traversal hardening', () => {
     expect(existsSync(join(ctx.dir, 'pwned-deal-tag'))).toBe(false)
   })
 
+  test("deal stage traversal payload (via import, bypassing `deal add`'s stage validation) does not escape outDir", () => {
+    const ctx = createTestContext()
+    const outDir = join(ctx.dir, 'export')
+    const csv = 'title,value,stage\nEvil Deal,1000,../../../pwned-stage\n'
+    const csvPath = join(ctx.dir, 'deals.csv')
+    writeFileSync(csvPath, csv)
+    ctx.runOK('import', 'deals', csvPath)
+
+    ctx.runOK('export-fs', outDir)
+
+    expect(existsSync(join(ctx.dir, 'pwned-stage'))).toBe(false)
+    for (const f of walk(outDir)) {
+      expect(f.startsWith(outDir)).toBe(true)
+    }
+  })
+
   test('activity with traversal payloads in type/deal (bypassing CLI validation) does not escape outDir', async () => {
     const ctx = createTestContext()
     const outDir = join(ctx.dir, 'export')
