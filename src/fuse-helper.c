@@ -163,13 +163,18 @@ static int64_t json_get_int64(const char *json, const char *key, int64_t default
 }
 
 /*
- * Escape `s` as a complete, double-quoted JSON string (including the
+ * Escape `s[0..len)` as a complete, double-quoted JSON string (including the
  * surrounding quotes) into `buf`. Escapes '"', '\\', and every control byte
  * 0x00-0x1F: the five with short escapes (\", \\, \n, \r, \t) and every
  * other control byte via the standard \u00XX form, per RFC 8259 (raw control
- * bytes are illegal inside a JSON string). `s` itself can never actually
- * contain a 0x00 byte (it's NUL-terminated), so in practice this covers
- * 0x01-0x1F.
+ * bytes are illegal inside a JSON string). Iteration is bounded by the
+ * explicit `len` rather than a NUL terminator, so an embedded 0x00 byte
+ * anywhere within `s[0..len)` is escaped via the standard six-character
+ * backslash-u-0000 form like any other control byte, instead of silently
+ * truncating the input at that byte -- this matters for callers like
+ * `build_write_request()`, whose `data`/`len` come from a raw,
+ * kernel-supplied write buffer that may legitimately contain embedded NULs
+ * before its logical end.
  *
  * `maxlen` is the total size of `buf`, including room for the terminating
  * NUL. On success, returns the number of bytes written excluding the NUL
@@ -179,7 +184,7 @@ static int64_t json_get_int64(const char *json, const char *key, int64_t default
  * check for this sentinel rather than assuming truncated output is still
  * usable.
  */
-static size_t json_escape(char *buf, size_t maxlen, const char *s) {
+static size_t json_escape(char *buf, size_t maxlen, const char *s, size_t len) {
     size_t p = 0;
 
     /* Writes one byte, failing (returning early from json_escape) if doing
@@ -191,7 +196,7 @@ static size_t json_escape(char *buf, size_t maxlen, const char *s) {
     } while (0)
 
     JSON_ESCAPE_PUT('"');
-    for (size_t i = 0; s[i]; i++) {
+    for (size_t i = 0; i < len; i++) {
         unsigned char c = (unsigned char)s[i];
         if (c == '"' || c == '\\') {
             JSON_ESCAPE_PUT('\\'); JSON_ESCAPE_PUT(c);
@@ -244,7 +249,7 @@ static char *build_path_request(const char *op, const char *path) {
 
     size_t rp = 0;
     rp += (size_t)snprintf(req + rp, reqsize - rp, "{\"op\":\"%s\",\"path\":", op);
-    size_t escaped = json_escape(req + rp, reqsize - rp, path);
+    size_t escaped = json_escape(req + rp, reqsize - rp, path, strlen(path));
     if (escaped == (size_t)-1) {
         free(req);
         return NULL;
@@ -263,10 +268,15 @@ static char *build_path_request(const char *op, const char *path) {
  * `data` is attacker/user-controlled file content and must never be
  * interpolated unescaped into the JSON we hand-build here.
  *
- * `len` is the length of `data` used purely for sizing the escape buffer
- * (matching the write buffer's tracked length, `wb->len`); `data` itself
- * must still be NUL-terminated, since json_escape() walks it via its own
- * NUL terminator rather than `len`.
+ * `len` is the exact length of `data` (matching the write buffer's tracked
+ * length, `wb->len`) and is passed straight through to json_escape(), which
+ * iterates `data[0..len)` by index rather than relying on NUL-termination.
+ * This matters because `data` is a raw, kernel-supplied write buffer that
+ * may legitimately contain embedded NUL bytes anywhere before its logical
+ * end at `len` — only `data[len]` itself is guaranteed to be NUL. Escaping
+ * by explicit length (rather than stopping at the first embedded NUL) is
+ * what makes embedded NULs round-trip correctly instead of silently
+ * truncating the write.
  *
  * The buffer is sized dynamically off strlen(path) and `len` rather than
  * using a fixed-size stack buffer, for the same reason as
@@ -296,14 +306,14 @@ static char *build_write_request(const char *path, const char *data, size_t len)
 
     size_t rp = 0;
     rp += (size_t)snprintf(req + rp, reqsize - rp, "{\"op\":\"write\",\"path\":");
-    size_t path_escaped = json_escape(req + rp, reqsize - rp, path);
+    size_t path_escaped = json_escape(req + rp, reqsize - rp, path, strlen(path));
     if (path_escaped == (size_t)-1) {
         free(req);
         return NULL;
     }
     rp += path_escaped;
     rp += (size_t)snprintf(req + rp, reqsize - rp, ",\"data\":");
-    size_t data_escaped = json_escape(req + rp, reqsize - rp, data);
+    size_t data_escaped = json_escape(req + rp, reqsize - rp, data, len);
     if (data_escaped == (size_t)-1) {
         free(req);
         return NULL;
