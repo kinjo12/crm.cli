@@ -19,6 +19,7 @@ import {
   LLM_TXT,
   slugify,
 } from './fuse-json'
+import { safeJoin, sanitizeFilenameSegment } from './path-safety'
 import {
   computeConversion,
   computeForecast,
@@ -92,40 +93,58 @@ export async function generateFS(
 
     const emails: string[] = safeJSON(c.emails)
     for (const email of emails) {
-      copyFileSync(
-        filePath,
-        join(outDir, 'contacts', '_by-email', `${email}.json`),
-      )
+      const target = safeJoin(outDir, 'contacts', '_by-email', `${email}.json`)
+      if (target) {
+        copyFileSync(filePath, target)
+      }
     }
 
     const phones: string[] = safeJSON(c.phones)
     for (const phone of phones) {
-      copyFileSync(
-        filePath,
-        join(outDir, 'contacts', '_by-phone', `${phone}.json`),
-      )
+      const target = safeJoin(outDir, 'contacts', '_by-phone', `${phone}.json`)
+      if (target) {
+        copyFileSync(filePath, target)
+      }
     }
 
     if (c.linkedin) {
-      copyFileSync(
-        filePath,
-        join(outDir, 'contacts', '_by-linkedin', `${c.linkedin}.json`),
+      const target = safeJoin(
+        outDir,
+        'contacts',
+        '_by-linkedin',
+        `${c.linkedin}.json`,
       )
+      if (target) {
+        copyFileSync(filePath, target)
+      }
     }
     if (c.x) {
-      copyFileSync(filePath, join(outDir, 'contacts', '_by-x', `${c.x}.json`))
+      const target = safeJoin(outDir, 'contacts', '_by-x', `${c.x}.json`)
+      if (target) {
+        copyFileSync(filePath, target)
+      }
     }
     if (c.bluesky) {
-      copyFileSync(
-        filePath,
-        join(outDir, 'contacts', '_by-bluesky', `${c.bluesky}.json`),
+      const target = safeJoin(
+        outDir,
+        'contacts',
+        '_by-bluesky',
+        `${c.bluesky}.json`,
       )
+      if (target) {
+        copyFileSync(filePath, target)
+      }
     }
     if (c.telegram) {
-      copyFileSync(
-        filePath,
-        join(outDir, 'contacts', '_by-telegram', `${c.telegram}.json`),
+      const target = safeJoin(
+        outDir,
+        'contacts',
+        '_by-telegram',
+        `${c.telegram}.json`,
       )
+      if (target) {
+        copyFileSync(filePath, target)
+      }
     }
 
     const companyIds: string[] = safeJSON(c.companies)
@@ -141,8 +160,11 @@ export async function generateFS(
 
     const tags: string[] = safeJSON(c.tags)
     for (const tag of tags) {
-      ensureDir(join(outDir, 'contacts', '_by-tag', tag))
-      copyFileSync(filePath, join(outDir, 'contacts', '_by-tag', tag, filename))
+      const tagDir = safeJoin(outDir, 'contacts', '_by-tag', tag)
+      if (tagDir) {
+        ensureDir(tagDir)
+        copyFileSync(filePath, join(tagDir, filename))
+      }
     }
   }
 
@@ -155,27 +177,32 @@ export async function generateFS(
 
     const websites: string[] = safeJSON(co.websites)
     for (const website of websites) {
-      copyFileSync(
-        filePath,
-        join(outDir, 'companies', '_by-website', `${website}.json`),
+      const target = safeJoin(
+        outDir,
+        'companies',
+        '_by-website',
+        `${website}.json`,
       )
+      if (target) {
+        copyFileSync(filePath, target)
+      }
     }
 
     const phones: string[] = safeJSON(co.phones)
     for (const phone of phones) {
-      copyFileSync(
-        filePath,
-        join(outDir, 'companies', '_by-phone', `${phone}.json`),
-      )
+      const target = safeJoin(outDir, 'companies', '_by-phone', `${phone}.json`)
+      if (target) {
+        copyFileSync(filePath, target)
+      }
     }
 
     const tags: string[] = safeJSON(co.tags)
     for (const tag of tags) {
-      ensureDir(join(outDir, 'companies', '_by-tag', tag))
-      copyFileSync(
-        filePath,
-        join(outDir, 'companies', '_by-tag', tag, filename),
-      )
+      const tagDir = safeJoin(outDir, 'companies', '_by-tag', tag)
+      if (tagDir) {
+        ensureDir(tagDir)
+        copyFileSync(filePath, join(tagDir, filename))
+      }
     }
   }
 
@@ -188,9 +215,15 @@ export async function generateFS(
     writeJSON(filePath, data)
 
     if (d.stage) {
-      const stageDir = join(outDir, 'deals', '_by-stage', d.stage)
-      ensureDir(stageDir)
-      copyFileSync(filePath, join(stageDir, filename))
+      // `d.stage` is validated against config.pipeline.stages by `deal
+      // add`/`update`, but `crm import deals` accepts any trimmed string
+      // (src/commands/importexport.ts) without that check, so it must be
+      // treated as untrusted here too.
+      const stageDir = safeJoin(outDir, 'deals', '_by-stage', d.stage)
+      if (stageDir) {
+        ensureDir(stageDir)
+        copyFileSync(filePath, join(stageDir, filename))
+      }
     }
 
     if (d.company) {
@@ -210,8 +243,11 @@ export async function generateFS(
 
     const tags: string[] = safeJSON(d.tags)
     for (const tag of tags) {
-      ensureDir(join(outDir, 'deals', '_by-tag', tag))
-      copyFileSync(filePath, join(outDir, 'deals', '_by-tag', tag, filename))
+      const tagDir = safeJoin(outDir, 'deals', '_by-tag', tag)
+      if (tagDir) {
+        ensureDir(tagDir)
+        copyFileSync(filePath, join(tagDir, filename))
+      }
     }
   }
 
@@ -230,12 +266,20 @@ export async function generateFS(
         .from(schema.contacts)
         .where(eq(schema.contacts.id, contactId))
       if (contactResults[0]) {
-        const contactSlug = `${contactId}...${slugify(contactResults[0].name || '')}`
-        ensureDir(join(outDir, 'activities', '_by-contact', contactSlug))
-        copyFileSync(
-          filePath,
-          join(outDir, 'activities', '_by-contact', contactSlug, filename),
+        // contactId is the linked contact's raw primary key (from
+        // a.contacts), not a value this loop generates — sanitize it for the
+        // same reason fuse-json.ts's filename builders do.
+        const contactSlug = `${sanitizeFilenameSegment(contactId)}...${slugify(contactResults[0].name || '')}`
+        const contactDir = safeJoin(
+          outDir,
+          'activities',
+          '_by-contact',
+          contactSlug,
         )
+        if (contactDir) {
+          ensureDir(contactDir)
+          copyFileSync(filePath, join(contactDir, filename))
+        }
       }
     }
 
@@ -255,19 +299,19 @@ export async function generateFS(
     }
 
     if (a.deal) {
-      ensureDir(join(outDir, 'activities', '_by-deal', a.deal))
-      copyFileSync(
-        filePath,
-        join(outDir, 'activities', '_by-deal', a.deal, filename),
-      )
+      const dealDir = safeJoin(outDir, 'activities', '_by-deal', a.deal)
+      if (dealDir) {
+        ensureDir(dealDir)
+        copyFileSync(filePath, join(dealDir, filename))
+      }
     }
 
     if (a.type) {
-      ensureDir(join(outDir, 'activities', '_by-type', a.type))
-      copyFileSync(
-        filePath,
-        join(outDir, 'activities', '_by-type', a.type, filename),
-      )
+      const typeDir = safeJoin(outDir, 'activities', '_by-type', a.type)
+      if (typeDir) {
+        ensureDir(typeDir)
+        copyFileSync(filePath, join(typeDir, filename))
+      }
     }
   }
 
