@@ -4,6 +4,10 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import type { CRMConfig } from '../src/config.ts'
+import { runHook } from '../src/hooks.ts'
+import { trustConfig, untrustConfig } from '../src/trust-store.ts'
+
 const CRM_BIN = join(import.meta.dir, '..', 'src', 'cli.ts')
 
 /**
@@ -339,5 +343,136 @@ describe('hooks trust-on-first-use gate', () => {
     // ...but the malicious hook must NOT have run — trust boundary or not,
     // an implicitly-discovered config's hooks require explicit trust.
     expect(existsSync(marker)).toBe(false)
+  })
+})
+
+/**
+ * TOCTOU regression tests for `runHook`/`checkHookTrust` (issue #6): the
+ * command that `spawnSync`s must come from the *same* read of `crm.toml`
+ * that the trust hash was computed from — never from `config.hooks`
+ * captured earlier, at `loadConfig()` time.
+ *
+ * A real double-swap race (attacker flips the file to malicious content
+ * before the victim process's `loadConfig()` call, then flips it back to
+ * the previously-trusted content before the hook actually executes) is
+ * only a handful of milliseconds wide and not reliably triggerable by
+ * racing a black-box CLI subprocess. Instead these tests call `runHook`
+ * directly with a hand-built `CRMConfig` whose `config.hooks` value stands
+ * in for "whatever was in memory when `loadConfig()` ran" while the
+ * on-disk file is staged to whatever content exists at hook-execution
+ * time — exactly reproducing the two ends of the race without needing to
+ * win an actual timing window.
+ *
+ * Unlike the black-box tests above, this calls `hooks.ts`/`trust-store.ts`
+ * directly in-process rather than spawning a subprocess with a fake
+ * $HOME, so it cannot isolate the trust store via `fakeHome()` (the
+ * module's trust-store path is resolved once, at module load, from the
+ * real `homedir()`). To avoid touching unrelated entries in the real
+ * `~/.crm/trusted_configs.json`, every entry this suite creates is keyed
+ * on a unique `mkdtempSync` path and removed again in a `finally` block.
+ */
+describe('hooks TOCTOU regression (issue #6)', () => {
+  function baseConfig(
+    configPath: string,
+    hooks: Record<string, string>,
+  ): CRMConfig {
+    return {
+      _meta: { path: configPath, source: 'implicit' },
+      database: { path: join(tmpdir(), 'unused.db') },
+      defaults: { format: 'table' },
+      hooks,
+      mount: {
+        default_path: join(tmpdir(), 'unused-mount'),
+        readonly: false,
+        allow_other: false,
+        max_recent_activity: 10,
+        search_limit: 10,
+      },
+      phone: { display: 'international' },
+      pipeline: {
+        stages: ['lead', 'closed-won', 'closed-lost'],
+        won_stage: 'closed-won',
+        lost_stage: 'closed-lost',
+      },
+    }
+  }
+
+  test('executes the freshly-read, trusted hook command — not the stale in-memory one from a swapped-then-reverted file', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'crm-toctou-'))
+    const configPath = join(dir, 'crm.toml')
+    const trustedMarker = join(dir, 'trusted.txt')
+    const maliciousMarker = join(dir, 'malicious.txt')
+    const trustedScript = join(dir, 'trusted.js')
+    const maliciousScript = join(dir, 'malicious.js')
+
+    writeFileSync(
+      trustedScript,
+      `require('node:fs').writeFileSync(${JSON.stringify(trustedMarker)}, 'ran')\n`,
+    )
+    writeFileSync(
+      maliciousScript,
+      `require('node:fs').writeFileSync(${JSON.stringify(maliciousMarker)}, 'ran')\n`,
+    )
+    const trustedCmd = `node "${trustedScript.replace(/\\/g, '/')}"`
+    const maliciousCmd = `node "${maliciousScript.replace(/\\/g, '/')}"`
+
+    // The file that exists on disk at hook-execution time (t1) is the
+    // previously-trusted, benign content — as if the attacker's swap back
+    // to the original already happened before the trust re-check.
+    writeFileSync(
+      configPath,
+      `[hooks]\npost-contact-add = "${toTOMLString(trustedCmd)}"\n`,
+    )
+
+    try {
+      trustConfig(configPath)
+
+      // Stand in for "what loadConfig() captured into memory at t0", when
+      // the attacker had (hypothetically) swapped the file to malicious
+      // content. `config.hooks` here deliberately disagrees with what's
+      // now on disk.
+      const staleConfig = baseConfig(configPath, {
+        'post-contact-add': maliciousCmd,
+      })
+
+      const ok = runHook(staleConfig, 'post-contact-add', { name: 'Jane' })
+
+      expect(ok).toBe(true)
+      expect(existsSync(maliciousMarker)).toBe(false)
+      expect(existsSync(trustedMarker)).toBe(true)
+    } finally {
+      untrustConfig(configPath)
+    }
+  })
+
+  test('fails safe (skips) when the freshly-read, trusted config no longer defines the hook at all', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'crm-toctou-'))
+    const configPath = join(dir, 'crm.toml')
+    const maliciousMarker = join(dir, 'malicious.txt')
+    const maliciousScript = join(dir, 'malicious.js')
+
+    writeFileSync(
+      maliciousScript,
+      `require('node:fs').writeFileSync(${JSON.stringify(maliciousMarker)}, 'ran')\n`,
+    )
+    const maliciousCmd = `node "${maliciousScript.replace(/\\/g, '/')}"`
+
+    // Trusted, on-disk content defines no hooks whatsoever.
+    writeFileSync(configPath, '[hooks]\n')
+
+    try {
+      trustConfig(configPath)
+
+      const staleConfig = baseConfig(configPath, {
+        'post-contact-add': maliciousCmd,
+      })
+
+      const ok = runHook(staleConfig, 'post-contact-add', { name: 'Jane' })
+
+      expect(ok).toBe(true)
+      expect(existsSync(maliciousMarker)).toBe(false)
+    } finally {
+      untrustConfig(configPath)
+    }
   })
 })
