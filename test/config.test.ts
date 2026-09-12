@@ -1,8 +1,47 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { execSync } from 'node:child_process'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { platform } from 'node:process'
 
-import { createTestContext } from './helpers.ts'
+import { createTestContext, initGitRepo } from './helpers.ts'
+
+const CRM_BIN = join(import.meta.dir, '..', 'src', 'cli.ts')
+
+/**
+ * Deny write access to `dir` for the current user so a subsequent file
+ * creation attempt inside it fails deterministically. On Windows, a plain
+ * `chmodSync` read-only attribute on a *directory* does not block creating
+ * new files inside it, so an ACL deny rule (`icacls`) is required instead.
+ */
+function lockDirectory(dir: string): void {
+  if (platform === 'win32') {
+    execSync(`icacls "${dir}" /deny "${process.env.USERNAME}:(OI)(CI)W"`, {
+      stdio: 'ignore',
+    })
+  } else {
+    chmodSync(dir, 0o555)
+  }
+}
+
+function unlockDirectory(dir: string): void {
+  if (platform === 'win32') {
+    execSync(`icacls "${dir}" /remove:d "${process.env.USERNAME}"`, {
+      stdio: 'ignore',
+    })
+  } else {
+    chmodSync(dir, 0o755)
+  }
+}
 
 describe('config: phone settings', () => {
   test('phone.default_country allows short numbers', () => {
@@ -471,7 +510,8 @@ describe('config resolution', () => {
   test('crm.toml in parent directory is found', () => {
     const ctx = createTestContext()
 
-    // Put config in ctx.dir (the parent).
+    // ctx.dir is the project root (a real git repo) and holds crm.toml.
+    initGitRepo(ctx.dir)
     writeFileSync(
       join(ctx.dir, 'crm.toml'),
       `[pipeline]\nstages = ["parent-1", "parent-2"]\n`,
@@ -504,6 +544,8 @@ describe('config resolution', () => {
   test('crm.toml in grandparent directory is found', () => {
     const ctx = createTestContext()
 
+    // ctx.dir is the project root (a real git repo) and holds crm.toml.
+    initGitRepo(ctx.dir)
     writeFileSync(
       join(ctx.dir, 'crm.toml'),
       `[pipeline]\nstages = ["grandparent-1", "grandparent-2"]\n`,
@@ -687,6 +729,329 @@ describe('config resolution', () => {
 
     const { existsSync } = require('node:fs')
     expect(existsSync(customDB)).toBe(true)
+  })
+})
+
+describe('config resolution: scoped to project directory (security)', () => {
+  test('crm.toml above the project root (.git boundary) is not loaded', () => {
+    const ctx = createTestContext({ noConfig: true })
+
+    // An unrelated ancestor directory has its own crm.toml.
+    writeFileSync(
+      join(ctx.dir, 'crm.toml'),
+      `[pipeline]\nstages = ["outer-stage"]\n`,
+    )
+
+    // The project root sits below it and is a real git repo.
+    const projectDir = join(ctx.dir, 'project')
+    mkdirSync(projectDir, { recursive: true })
+    initGitRepo(projectDir)
+
+    // The outer/ancestor stage must NOT be visible from inside the project.
+    const outerAttempt = Bun.spawnSync(
+      [
+        'bun',
+        'run',
+        CRM_BIN,
+        '--db',
+        ctx.dbPath,
+        'deal',
+        'add',
+        '--title',
+        'Test',
+        '--stage',
+        'outer-stage',
+      ],
+      { cwd: projectDir, env: { ...process.env, NO_COLOR: '1' } },
+    )
+    expect(outerAttempt.exitCode).not.toBe(0)
+
+    // Built-in default config is used instead (its default stages apply).
+    const defaultAttempt = Bun.spawnSync(
+      [
+        'bun',
+        'run',
+        CRM_BIN,
+        '--db',
+        ctx.dbPath,
+        'deal',
+        'add',
+        '--title',
+        'Test2',
+        '--stage',
+        'lead',
+      ],
+      { cwd: projectDir, env: { ...process.env, NO_COLOR: '1' } },
+    )
+    expect(defaultAttempt.exitCode).toBe(0)
+  })
+
+  test('crm.toml at the project root (.git directory) is still found from a subdirectory', () => {
+    const ctx = createTestContext({ noConfig: true })
+    initGitRepo(ctx.dir)
+    writeFileSync(
+      join(ctx.dir, 'crm.toml'),
+      `[pipeline]\nstages = ["root-stage"]\n`,
+    )
+
+    const nested = join(ctx.dir, 'a', 'b')
+    mkdirSync(nested, { recursive: true })
+
+    const proc = Bun.spawnSync(
+      [
+        'bun',
+        'run',
+        CRM_BIN,
+        '--db',
+        ctx.dbPath,
+        'deal',
+        'add',
+        '--title',
+        'Test',
+        '--stage',
+        'root-stage',
+      ],
+      { cwd: nested, env: { ...process.env, NO_COLOR: '1' } },
+    )
+    expect(proc.exitCode).toBe(0)
+  })
+
+  test('when no .git is found anywhere, only the current directory is checked (not ancestors)', () => {
+    const ctx = createTestContext({ noConfig: true })
+
+    // No .git anywhere in this chain — crm.toml sits in ctx.dir only.
+    writeFileSync(
+      join(ctx.dir, 'crm.toml'),
+      `[pipeline]\nstages = ["parent-only-stage"]\n`,
+    )
+
+    const subdir = join(ctx.dir, 'subproject')
+    mkdirSync(subdir)
+
+    const proc = Bun.spawnSync(
+      [
+        'bun',
+        'run',
+        CRM_BIN,
+        '--db',
+        ctx.dbPath,
+        'deal',
+        'add',
+        '--title',
+        'Test',
+        '--stage',
+        'parent-only-stage',
+      ],
+      { cwd: subdir, env: { ...process.env, NO_COLOR: '1' } },
+    )
+    expect(proc.exitCode).not.toBe(0)
+  })
+
+  test('does not fall back to ~/.crm/config.toml when no project config exists', () => {
+    const ctx = createTestContext({ noConfig: true })
+    const fakeHome = mkdtempSync(join(tmpdir(), 'crm-fakehome-'))
+    mkdirSync(join(fakeHome, '.crm'), { recursive: true })
+    writeFileSync(
+      join(fakeHome, '.crm', 'config.toml'),
+      `[pipeline]\nstages = ["global-stage"]\n`,
+    )
+
+    const projectDir = join(ctx.dir, 'project')
+    mkdirSync(projectDir, { recursive: true })
+    const fakeHomeEnv = {
+      ...process.env,
+      NO_COLOR: '1',
+      HOME: fakeHome,
+      USERPROFILE: fakeHome,
+    }
+
+    // The global config's stage must be ignored.
+    const globalAttempt = Bun.spawnSync(
+      [
+        'bun',
+        'run',
+        CRM_BIN,
+        '--db',
+        ctx.dbPath,
+        'deal',
+        'add',
+        '--title',
+        'Test',
+        '--stage',
+        'global-stage',
+      ],
+      { cwd: projectDir, env: fakeHomeEnv },
+    )
+    expect(globalAttempt.exitCode).not.toBe(0)
+
+    // Falls back to the built-in default config instead.
+    const defaultAttempt = Bun.spawnSync(
+      [
+        'bun',
+        'run',
+        CRM_BIN,
+        '--db',
+        ctx.dbPath,
+        'deal',
+        'add',
+        '--title',
+        'Test2',
+        '--stage',
+        'lead',
+      ],
+      { cwd: projectDir, env: fakeHomeEnv },
+    )
+    expect(defaultAttempt.exitCode).toBe(0)
+  })
+
+  test('auto-generated default config is created at the project root, not the home directory', () => {
+    const ctx = createTestContext({ noConfig: true })
+    const fakeHome = mkdtempSync(join(tmpdir(), 'crm-fakehome-'))
+    const projectDir = join(ctx.dir, 'project')
+    mkdirSync(projectDir, { recursive: true })
+    initGitRepo(projectDir)
+
+    const proc = Bun.spawnSync(
+      [
+        'bun',
+        'run',
+        CRM_BIN,
+        '--db',
+        ctx.dbPath,
+        'contact',
+        'add',
+        '--name',
+        'Jane',
+      ],
+      {
+        cwd: projectDir,
+        env: {
+          ...process.env,
+          NO_COLOR: '1',
+          HOME: fakeHome,
+          USERPROFILE: fakeHome,
+        },
+      },
+    )
+    expect(proc.exitCode).toBe(0)
+    expect(existsSync(join(projectDir, 'crm.toml'))).toBe(true)
+    expect(existsSync(join(fakeHome, '.crm', 'config.toml'))).toBe(false)
+  })
+
+  test('auto-generated default config is created in the current directory when no .git is found', () => {
+    const ctx = createTestContext({ noConfig: true })
+    const fakeHome = mkdtempSync(join(tmpdir(), 'crm-fakehome-'))
+    const projectDir = join(ctx.dir, 'project')
+    mkdirSync(projectDir, { recursive: true })
+
+    const proc = Bun.spawnSync(
+      [
+        'bun',
+        'run',
+        CRM_BIN,
+        '--db',
+        ctx.dbPath,
+        'contact',
+        'add',
+        '--name',
+        'Jane',
+      ],
+      {
+        cwd: projectDir,
+        env: {
+          ...process.env,
+          NO_COLOR: '1',
+          HOME: fakeHome,
+          USERPROFILE: fakeHome,
+        },
+      },
+    )
+    expect(proc.exitCode).toBe(0)
+    expect(existsSync(join(projectDir, 'crm.toml'))).toBe(true)
+    expect(existsSync(join(fakeHome, '.crm', 'config.toml'))).toBe(false)
+  })
+
+  test('a bare ".git" file (not a real repository) in an ancestor does not establish a trust boundary — hooks are not executed', () => {
+    const ctx = createTestContext({ noConfig: true })
+
+    // Attacker plants a fake ".git" — an arbitrary file, not a real git
+    // repository — plus a malicious crm.toml with a [hooks] entry, in an
+    // ancestor directory (e.g. an extracted archive, a shared drive, $HOME).
+    writeFileSync(join(ctx.dir, '.git'), 'not a real git repository')
+
+    const markerFile = join(ctx.dir, 'pwned.txt').replace(/\\/g, '/')
+    const hookScript = join(ctx.dir, 'hook.js')
+    writeFileSync(
+      hookScript,
+      `require('node:fs').writeFileSync('${markerFile}', 'pwned')\n`,
+    )
+    const hookScriptFwd = hookScript.replace(/\\/g, '/')
+    const hookCmd = `node "${hookScriptFwd}"`
+    writeFileSync(
+      join(ctx.dir, 'crm.toml'),
+      `[hooks]\npost-contact-add = "${hookCmd.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"\n`,
+    )
+
+    // The victim runs the CLI from a subdirectory that has NO real git repo
+    // of its own — a very common situation (ad hoc folder, extracted
+    // archive, shared drive, home directory).
+    const victimDir = join(ctx.dir, 'subproject')
+    mkdirSync(victimDir, { recursive: true })
+
+    Bun.spawnSync(
+      [
+        'bun',
+        'run',
+        CRM_BIN,
+        '--db',
+        ctx.dbPath,
+        'contact',
+        'add',
+        '--name',
+        'Jane',
+      ],
+      { cwd: victimDir, env: { ...process.env, NO_COLOR: '1' } },
+    )
+
+    // The malicious hook must NOT have run — the fake ".git" file must not
+    // be trusted as a project-root boundary.
+    expect(existsSync(join(ctx.dir, 'pwned.txt'))).toBe(false)
+  })
+})
+
+describe('config resolution: auto-create-default-config failure handling', () => {
+  test('loadConfig falls back to in-memory defaults when the auto-created config cannot be written', () => {
+    const ctx = createTestContext({ noConfig: true })
+    const projectDir = join(ctx.dir, 'project')
+    mkdirSync(projectDir, { recursive: true })
+    // No .git anywhere — findProjectRoot has no boundary, so the
+    // auto-created config would be written directly into projectDir.
+
+    lockDirectory(projectDir)
+    try {
+      const proc = Bun.spawnSync(
+        [
+          'bun',
+          'run',
+          CRM_BIN,
+          '--db',
+          ctx.dbPath,
+          'contact',
+          'add',
+          '--name',
+          'Jane',
+        ],
+        { cwd: projectDir, env: { ...process.env, NO_COLOR: '1' } },
+      )
+      // Must NOT hard-fail with a raw fs error — should continue using the
+      // in-memory default config instead.
+      expect(proc.exitCode).toBe(0)
+      expect(proc.stdout.toString().trim().length).toBeGreaterThan(0)
+      // No config file should have been left behind in the locked directory.
+      expect(existsSync(join(projectDir, 'crm.toml'))).toBe(false)
+    } finally {
+      unlockDirectory(projectDir)
+    }
   })
 })
 

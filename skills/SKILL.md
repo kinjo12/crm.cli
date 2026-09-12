@@ -30,7 +30,7 @@ crm --version
 
 ## Configuration
 
-Optional. Create `crm.toml` in your project root or `~/.crm/config.toml`:
+Optional. Create `crm.toml` in your project root:
 
 ```toml
 [database]
@@ -52,7 +52,7 @@ display = "international"
 default_path = "~/crm"
 ```
 
-Config is auto-discovered by walking up from the current directory. Override with `--config <path>` or `CRM_CONFIG` env var.
+Config is auto-discovered by walking up from the current directory, but never past the current git repository's root (if CWD isn't inside a git repository, only the current directory is checked). There is no global `~/.crm/config.toml` fallback. Override with `--config <path>` or `CRM_CONFIG` env var.
 
 ## Global Flags
 
@@ -450,7 +450,7 @@ Prefix with `json:` for typed values (numbers, booleans, arrays).
 
 ## Hooks
 
-Configure shell hooks in `crm.toml` that fire on mutations:
+Configure shell hooks in the project's own `crm.toml` that fire on mutations (there is no global config file):
 
 ```toml
 [hooks]
@@ -462,6 +462,8 @@ pre-contact-rm = "~/.crm/hooks/confirm-delete.sh"
 Entity data is passed as JSON on stdin. Pre-hooks abort on non-zero exit.
 
 Available hooks: `{pre,post}-{contact,company,deal}-{add,edit,rm}`, `{pre,post}-deal-stage-change`, `{pre,post}-activity-add`.
+
+Hooks in an implicitly-discovered `crm.toml` (not passed via `--config`/`CRM_CONFIG`) require trust-on-first-use: interactively you'll be prompted once (approval is remembered by path + content hash); non-interactively an untrusted hook is skipped with a warning rather than run silently. Run `crm config trust ./crm.toml` to trust one ahead of time. Configs passed explicitly via `--config`/`CRM_CONFIG` are exempt.
 
 ## Tips for AI Agents
 

@@ -1,9 +1,20 @@
+import { execSync } from 'node:child_process'
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 /** Whether the current platform supports FUSE/NFS mount tests */
 export const canMount = existsSync('/dev/fuse') // Linux FUSE only — macOS NFS mount causes kernel panics, skip for now
+
+/**
+ * Initialize a real git repository at `dir`. Used by tests that need a
+ * genuine project-root boundary — config resolution trusts `git
+ * rev-parse --show-toplevel`, not the mere presence of a `.git` path, so
+ * tests must create real repos rather than a bare `.git` file/directory.
+ */
+export function initGitRepo(dir: string): void {
+  execSync('git init', { cwd: dir, stdio: 'ignore' })
+}
 
 const CRM_BIN = join(import.meta.dir, '..', 'src', 'cli.ts')
 
