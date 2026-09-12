@@ -2,6 +2,8 @@
 
 ![crm.cli — Your CRM is a filesystem](assets/cover.png)
 
+> **This is a security-hardened fork.** [kinjo12/crm.cli](https://github.com/kinjo12/crm.cli) fixes several vulnerabilities found in [the upstream project](https://github.com/dzhng/crm.cli). See [CHANGELOG.md](CHANGELOG.md) for what changed and [SECURITY.md](SECURITY.md) for details on each fixed vulnerability. Everything else in this README describes the CRM itself and applies to this fork unchanged.
+
 **A headless, CLI-first CRM for AI native companies.** Contacts, deals, and pipeline in a single SQLite file — queryable from your terminal, composable with Unix tools, and mountable as a virtual filesystem so any tool that reads files (Claude Code, Codex, grep, jq, vim) has full CRM access without any integration.
 
 No server. No Docker. No accounts. No GUI. Just `npm install -g @dzhng/crm.cli` and go.
