@@ -242,14 +242,14 @@ static char *build_path_request(const char *op, const char *path) {
     char *req = malloc(reqsize);
     if (!req) return NULL;
 
-    int rp = 0;
-    rp += snprintf(req + rp, reqsize - rp, "{\"op\":\"%s\",\"path\":", op);
+    size_t rp = 0;
+    rp += (size_t)snprintf(req + rp, reqsize - rp, "{\"op\":\"%s\",\"path\":", op);
     size_t escaped = json_escape(req + rp, reqsize - rp, path);
     if (escaped == (size_t)-1) {
         free(req);
         return NULL;
     }
-    rp += (int)escaped;
+    rp += escaped;
     snprintf(req + rp, reqsize - rp, "}");
     return req;
 }
@@ -523,24 +523,24 @@ static int crm_write(const char *path, const char *data, size_t size,
         return -ENOMEM;
     }
 
-    int rp = 0;
-    rp += snprintf(req + rp, reqsize - rp, "{\"op\":\"write\",\"path\":");
+    size_t rp = 0;
+    rp += (size_t)snprintf(req + rp, reqsize - rp, "{\"op\":\"write\",\"path\":");
     size_t path_escaped = json_escape(req + rp, reqsize - rp, path);
     if (path_escaped == (size_t)-1) {
         free(req);
         pthread_mutex_unlock(&g_write_mutex);
         return -EIO;
     }
-    rp += (int)path_escaped;
-    rp += snprintf(req + rp, reqsize - rp, ",\"data\":");
+    rp += path_escaped;
+    rp += (size_t)snprintf(req + rp, reqsize - rp, ",\"data\":");
     size_t data_escaped = json_escape(req + rp, reqsize - rp, wb->data);
     if (data_escaped == (size_t)-1) {
         free(req);
         pthread_mutex_unlock(&g_write_mutex);
         return -EIO;
     }
-    rp += (int)data_escaped;
-    rp += snprintf(req + rp, reqsize - rp, "}");
+    rp += data_escaped;
+    snprintf(req + rp, reqsize - rp, "}");
 
     pthread_mutex_unlock(&g_write_mutex);
 
@@ -591,24 +591,24 @@ static int crm_flush(const char *path, struct fuse_file_info *fi) {
         return -ENOMEM;
     }
 
-    int rp = 0;
-    rp += snprintf(req + rp, reqsize - rp, "{\"op\":\"write\",\"path\":");
+    size_t rp = 0;
+    rp += (size_t)snprintf(req + rp, reqsize - rp, "{\"op\":\"write\",\"path\":");
     size_t path_escaped = json_escape(req + rp, reqsize - rp, path);
     if (path_escaped == (size_t)-1) {
         free(req);
         pthread_mutex_unlock(&g_write_mutex);
         return -EIO;
     }
-    rp += (int)path_escaped;
-    rp += snprintf(req + rp, reqsize - rp, ",\"data\":");
+    rp += path_escaped;
+    rp += (size_t)snprintf(req + rp, reqsize - rp, ",\"data\":");
     size_t data_escaped = json_escape(req + rp, reqsize - rp, wb->data);
     if (data_escaped == (size_t)-1) {
         free(req);
         pthread_mutex_unlock(&g_write_mutex);
         return -EIO;
     }
-    rp += (int)data_escaped;
-    rp += snprintf(req + rp, reqsize - rp, "}");
+    rp += data_escaped;
+    snprintf(req + rp, reqsize - rp, "}");
 
     pthread_mutex_unlock(&g_write_mutex);
 
