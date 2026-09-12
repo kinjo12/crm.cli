@@ -254,6 +254,65 @@ static char *build_path_request(const char *op, const char *path) {
     return req;
 }
 
+/*
+ * Build a request of the form
+ * {"op":"write","path":"<escaped path>","data":"<escaped data>"}.
+ * Used by crm_write/crm_flush, whose requests interpolate both `path` and
+ * the buffered file contents (`data`) — never raw, always through
+ * json_escape(). Just like `path` (see build_path_request()'s doc comment),
+ * `data` is attacker/user-controlled file content and must never be
+ * interpolated unescaped into the JSON we hand-build here.
+ *
+ * `len` is the length of `data` used purely for sizing the escape buffer
+ * (matching the write buffer's tracked length, `wb->len`); `data` itself
+ * must still be NUL-terminated, since json_escape() walks it via its own
+ * NUL terminator rather than `len`.
+ *
+ * The buffer is sized dynamically off strlen(path) and `len` rather than
+ * using a fixed-size stack buffer, for the same reason as
+ * build_path_request(): json_escape() can expand its input by up to 6x+2
+ * bytes (every byte becomes a \u00XX escape), so a fixed buffer could
+ * overflow or silently truncate a long or heavily-escaped path/data into a
+ * different, valid-but-wrong request.
+ *
+ * Returns a malloc'd string (caller must free), or NULL on allocation
+ * failure OR if json_escape() reports it could not fit the escaped path or
+ * escaped data within the buffer computed below (which should never happen
+ * given the sizing formula, but is checked defensively — see
+ * json_escape()'s contract). Either way, callers already treat a NULL
+ * return uniformly as -ENOMEM, matching precedent from build_path_request's
+ * 4 callers.
+ *
+ * This function touches no shared state and does no locking — callers
+ * (crm_write/crm_flush) are responsible for holding g_write_mutex while
+ * reading `path`/`data`/`len` from the write buffer before calling this.
+ */
+static char *build_write_request(const char *path, const char *data, size_t len) {
+    size_t path_escaped_max = strlen(path) * 6 + 3; /* worst case: every byte \u00XX-escaped, plus quotes */
+    size_t data_escaped_max = len * 6 + 3;
+    size_t reqsize = path_escaped_max + data_escaped_max + 128;
+    char *req = malloc(reqsize);
+    if (!req) return NULL;
+
+    size_t rp = 0;
+    rp += (size_t)snprintf(req + rp, reqsize - rp, "{\"op\":\"write\",\"path\":");
+    size_t path_escaped = json_escape(req + rp, reqsize - rp, path);
+    if (path_escaped == (size_t)-1) {
+        free(req);
+        return NULL;
+    }
+    rp += path_escaped;
+    rp += (size_t)snprintf(req + rp, reqsize - rp, ",\"data\":");
+    size_t data_escaped = json_escape(req + rp, reqsize - rp, data);
+    if (data_escaped == (size_t)-1) {
+        free(req);
+        return NULL;
+    }
+    rp += data_escaped;
+    snprintf(req + rp, reqsize - rp, "}");
+    return req;
+}
+
 static char **json_get_entries(const char *json, int *count) {
     *count = 0;
     const char *v = json_find_key(json, "entries");
@@ -510,37 +569,12 @@ static int crm_write(const char *path, const char *data, size_t size,
 
     /* Send data to daemon immediately for validation + persistence.
      * Bun's writeFileSync doesn't check close() errors, so we must
-     * validate here in the write() syscall where errors propagate.
-     *
-     * Sized for json_escape()'s worst case: every byte expands to a 6-byte
-     * \u00XX escape (see json_escape()'s doc comment). */
-    size_t path_escaped_max = strlen(path) * 6 + 3;
-    size_t data_escaped_max = wb->len * 6 + 3;
-    size_t reqsize = path_escaped_max + data_escaped_max + 128;
-    char *req = malloc(reqsize);
+     * validate here in the write() syscall where errors propagate. */
+    char *req = build_write_request(path, wb->data, wb->len);
     if (!req) {
         pthread_mutex_unlock(&g_write_mutex);
         return -ENOMEM;
     }
-
-    size_t rp = 0;
-    rp += (size_t)snprintf(req + rp, reqsize - rp, "{\"op\":\"write\",\"path\":");
-    size_t path_escaped = json_escape(req + rp, reqsize - rp, path);
-    if (path_escaped == (size_t)-1) {
-        free(req);
-        pthread_mutex_unlock(&g_write_mutex);
-        return -EIO;
-    }
-    rp += path_escaped;
-    rp += (size_t)snprintf(req + rp, reqsize - rp, ",\"data\":");
-    size_t data_escaped = json_escape(req + rp, reqsize - rp, wb->data);
-    if (data_escaped == (size_t)-1) {
-        free(req);
-        pthread_mutex_unlock(&g_write_mutex);
-        return -EIO;
-    }
-    rp += data_escaped;
-    snprintf(req + rp, reqsize - rp, "}");
 
     pthread_mutex_unlock(&g_write_mutex);
 
@@ -579,36 +613,12 @@ static int crm_flush(const char *path, struct fuse_file_info *fi) {
         return 0;
     }
 
-    /* Send uncommitted data to daemon (fallback for multi-chunk writes).
-     * Sized for json_escape()'s worst case: every byte expands to a 6-byte
-     * \u00XX escape (see json_escape()'s doc comment). */
-    size_t path_escaped_max = strlen(path) * 6 + 3;
-    size_t data_escaped_max = wb->len * 6 + 3;
-    size_t reqsize = path_escaped_max + data_escaped_max + 128;
-    char *req = malloc(reqsize);
+    /* Send uncommitted data to daemon (fallback for multi-chunk writes). */
+    char *req = build_write_request(path, wb->data, wb->len);
     if (!req) {
         pthread_mutex_unlock(&g_write_mutex);
         return -ENOMEM;
     }
-
-    size_t rp = 0;
-    rp += (size_t)snprintf(req + rp, reqsize - rp, "{\"op\":\"write\",\"path\":");
-    size_t path_escaped = json_escape(req + rp, reqsize - rp, path);
-    if (path_escaped == (size_t)-1) {
-        free(req);
-        pthread_mutex_unlock(&g_write_mutex);
-        return -EIO;
-    }
-    rp += path_escaped;
-    rp += (size_t)snprintf(req + rp, reqsize - rp, ",\"data\":");
-    size_t data_escaped = json_escape(req + rp, reqsize - rp, wb->data);
-    if (data_escaped == (size_t)-1) {
-        free(req);
-        pthread_mutex_unlock(&g_write_mutex);
-        return -EIO;
-    }
-    rp += data_escaped;
-    snprintf(req + rp, reqsize - rp, "}");
 
     pthread_mutex_unlock(&g_write_mutex);
 
