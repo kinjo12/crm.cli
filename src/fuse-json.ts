@@ -5,6 +5,7 @@ import type { DB } from './db'
 import type { Activity, Company, Contact, Deal } from './drizzle-schema'
 import * as schema from './drizzle-schema'
 import { safeJSON } from './format'
+import { sanitizeFilenameSegment } from './path-safety'
 
 export const LLM_TXT = `# CRM Filesystem
 
@@ -88,21 +89,28 @@ export function slugify(name: string): string {
     .replace(/^-|-$/g, '')
 }
 
+// Primary keys are always generated internally via `makeId()` (alphanumeric
+// ULID-based), so this is a no-op for every record written by this CLI. It's
+// defense-in-depth against the same untrusted-input surface as the
+// `d.stage`/import-bypass fix in export-fs.ts: a future API, a compromised
+// import format, or direct DB manipulation could otherwise smuggle a
+// traversal payload through an id that flows straight into a filename.
 export function contactFilename(c: Contact): string {
-  return `${c.id}...${slugify(c.name || '')}.json`
+  return `${sanitizeFilenameSegment(c.id)}...${slugify(c.name || '')}.json`
 }
 
 export function companyFilename(co: Company): string {
-  return `${co.id}...${slugify(co.name || '')}.json`
+  return `${sanitizeFilenameSegment(co.id)}...${slugify(co.name || '')}.json`
 }
 
 export function dealFilename(d: Deal): string {
-  return `${d.id}...${slugify(d.title || '')}.json`
+  return `${sanitizeFilenameSegment(d.id)}...${slugify(d.title || '')}.json`
 }
 
 export function activityFilename(a: Activity): string {
-  const dateStr = (a.created_at || '').slice(0, 10)
-  return `${a.id}...${a.type || 'unknown'}-${dateStr}.json`
+  const dateStr = sanitizeFilenameSegment((a.created_at || '').slice(0, 10))
+  const type = sanitizeFilenameSegment(a.type || 'unknown')
+  return `${sanitizeFilenameSegment(a.id)}...${type}-${dateStr}.json`
 }
 
 export async function buildContactJSON(

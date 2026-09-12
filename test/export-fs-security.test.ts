@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { existsSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import type { CRMConfig } from '../src/config.ts'
@@ -264,6 +264,57 @@ describe('export-fs: path traversal hardening', () => {
     expect(existsSync(join(ctx.dir, 'pwned-deal'))).toBe(false)
     for (const f of walk(outDir)) {
       expect(f.startsWith(outDir)).toBe(true)
+    }
+  })
+
+  test('a record with a traversal payload as its primary-key id (bypassing normal ID generation) does not escape outDir', async () => {
+    const ctx = createTestContext()
+    const outDir = join(ctx.dir, 'export')
+    const dbPath = join(ctx.dir, 'direct-id.db')
+    const db = await openDB(dbPath)
+    const now = new Date().toISOString()
+    const evilId = '../../../pwned-contact-id'
+
+    await db.insert(schema.contacts).values({
+      id: evilId,
+      name: 'Evil',
+      emails: '[]',
+      phones: '[]',
+      companies: '[]',
+      tags: '[]',
+      custom_fields: '{}',
+      created_at: now,
+      updated_at: now,
+    })
+    // An activity referencing the malicious contact id exercises the
+    // `_by-contact` fan-out, which also embeds the raw contact id.
+    await db.insert(schema.activities).values({
+      id: 'act_ref_evil',
+      type: 'note',
+      body: 'evil',
+      contacts: JSON.stringify([evilId]),
+      company: null,
+      deal: null,
+      custom_fields: '{}',
+      created_at: now,
+    })
+
+    // Compute where the unsanitized filename (`${id}...${slug}.json`) would
+    // land when joined as `contacts/<filename>` — three leading `../`
+    // segments in the id climb out of outDir/contacts, past outDir itself,
+    // to outDir's grandparent (ctx.dir's parent, i.e. the OS temp root).
+    const wouldBeEscapePath = join(outDir, 'contacts', `${evilId}...evil.json`)
+    expect(wouldBeEscapePath.startsWith(outDir)).toBe(false) // sanity: the payload is a real traversal
+
+    try {
+      await generateFS(db, testConfig(), outDir)
+
+      expect(existsSync(wouldBeEscapePath)).toBe(false)
+      for (const f of walk(outDir)) {
+        expect(f.startsWith(outDir)).toBe(true)
+      }
+    } finally {
+      rmSync(wouldBeEscapePath, { force: true })
     }
   })
 

@@ -19,7 +19,7 @@ import {
   LLM_TXT,
   slugify,
 } from './fuse-json'
-import { safeJoin } from './path-safety'
+import { safeJoin, sanitizeFilenameSegment } from './path-safety'
 import {
   computeConversion,
   computeForecast,
@@ -266,12 +266,20 @@ export async function generateFS(
         .from(schema.contacts)
         .where(eq(schema.contacts.id, contactId))
       if (contactResults[0]) {
-        const contactSlug = `${contactId}...${slugify(contactResults[0].name || '')}`
-        ensureDir(join(outDir, 'activities', '_by-contact', contactSlug))
-        copyFileSync(
-          filePath,
-          join(outDir, 'activities', '_by-contact', contactSlug, filename),
+        // contactId is the linked contact's raw primary key (from
+        // a.contacts), not a value this loop generates — sanitize it for the
+        // same reason fuse-json.ts's filename builders do.
+        const contactSlug = `${sanitizeFilenameSegment(contactId)}...${slugify(contactResults[0].name || '')}`
+        const contactDir = safeJoin(
+          outDir,
+          'activities',
+          '_by-contact',
+          contactSlug,
         )
+        if (contactDir) {
+          ensureDir(contactDir)
+          copyFileSync(filePath, join(contactDir, filename))
+        }
       }
     }
 
