@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import { execSync, spawnSync } from 'node:child_process'
+import { execSync } from 'node:child_process'
 import {
   mkdirSync,
   readdirSync,
@@ -7,10 +7,14 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { canMount, createTestContext, type TestContext } from './helpers.ts'
+import {
+  canMount,
+  cleanupStaleFuseMounts,
+  createTestContext,
+  type TestContext,
+} from './helpers.ts'
 
 // Use shell echo instead of fs.writeFileSync for NFS writes.
 // Bun's writeFileSync uses O_TRUNC which triggers a macOS NFS kernel panic
@@ -19,45 +23,11 @@ function writeFile(path: string, content: string) {
   execSync(`printf '%s' '${content.replace(/'/g, "'\\''")}' > '${path}'`)
 }
 
-// Clean up stale FUSE mounts from previous interrupted test runs.
-// When a test run is killed (Ctrl+C, crash, OOM), afterAll never fires and
-// the detached crm-fuse/fuse-daemon processes survive. Without this cleanup,
-// they accumulate across runs and exhaust kernel FUSE connections.
-if (canMount && process.platform === 'linux') {
-  const pidFiles = readdirSync(tmpdir()).filter(
-    (f) => f.startsWith('crm-mount-') && f.endsWith('.pid'),
-  )
-  for (const f of pidFiles) {
-    const pidPath = join(tmpdir(), f)
-    try {
-      const pids = readFileSync(pidPath, 'utf-8').trim().split('\n')
-      for (const pid of pids) {
-        try {
-          process.kill(Number(pid))
-        } catch {
-          // already dead
-        }
-      }
-      unlinkSync(pidPath)
-    } catch {
-      // ignore
-    }
-  }
-  // Also clean up any stale test FUSE mounts still in the kernel
-  const mounts = spawnSync('bash', [
-    '-c',
-    "mount | grep 'fuse\\.crm-fuse' | grep '/tmp/crm-test-' | awk '{print $3}'",
-  ])
-  if (mounts.stdout) {
-    for (const mp of mounts.stdout.toString().trim().split('\n')) {
-      if (mp) {
-        spawnSync('fusermount', ['-u', mp], {
-          stdio: ['pipe', 'pipe', 'pipe'],
-        })
-      }
-    }
-  }
-}
+// Clean up stale FUSE mounts/processes from previous interrupted test runs
+// before this file's own mount attempts. See cleanupStaleFuseMounts() in
+// helpers.ts — other FUSE-mounting test files call this too, since Bun does
+// not guarantee this file runs first.
+cleanupStaleFuseMounts()
 
 interface FuseTestContext extends TestContext {
   mounted: boolean
