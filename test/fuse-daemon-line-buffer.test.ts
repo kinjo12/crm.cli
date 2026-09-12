@@ -104,4 +104,10 @@ describe('LineBuffer: binary-safe newline-delimited framing', () => {
     const lineBuffer = new LineBuffer()
     expect(lineBuffer.push(Buffer.from('\n', 'utf-8'))).toEqual([''])
   })
+
+  test('preserves an empty line adjacent to non-empty lines in the same chunk', () => {
+    const lineBuffer = new LineBuffer()
+    const chunk = Buffer.from('a\n\nb\n', 'utf-8')
+    expect(lineBuffer.push(chunk)).toEqual(['a', '', 'b'])
+  })
 })
