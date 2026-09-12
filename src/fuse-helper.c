@@ -162,24 +162,57 @@ static int64_t json_get_int64(const char *json, const char *key, int64_t default
     return (int64_t)strtoll(v, NULL, 10);
 }
 
-static int json_escape(char *buf, size_t maxlen, const char *s) {
-    int p = 0;
-    p += snprintf(buf + p, maxlen - p, "\"");
-    for (size_t i = 0; s[i] && (size_t)p < maxlen - 2; i++) {
-        char c = s[i];
+/*
+ * Escape `s` as a complete, double-quoted JSON string (including the
+ * surrounding quotes) into `buf`. Escapes '"', '\\', and every control byte
+ * 0x00-0x1F: the five with short escapes (\", \\, \n, \r, \t) and every
+ * other control byte via the standard \u00XX form, per RFC 8259 (raw control
+ * bytes are illegal inside a JSON string). `s` itself can never actually
+ * contain a 0x00 byte (it's NUL-terminated), so in practice this covers
+ * 0x01-0x1F.
+ *
+ * `maxlen` is the total size of `buf`, including room for the terminating
+ * NUL. On success, returns the number of bytes written excluding the NUL
+ * (i.e. strlen(buf)), matching this file's other snprintf-based helpers. If
+ * the escaped output (plus quotes and NUL) would not fit in `maxlen`,
+ * returns (size_t)-1 and leaves `buf`'s contents unspecified — callers MUST
+ * check for this sentinel rather than assuming truncated output is still
+ * usable.
+ */
+static size_t json_escape(char *buf, size_t maxlen, const char *s) {
+    size_t p = 0;
+
+    /* Writes one byte, failing (returning early from json_escape) if doing
+     * so wouldn't leave room for a terminating NUL afterward. */
+#define JSON_ESCAPE_PUT(ch) \
+    do { \
+        if (p + 1 >= maxlen) return (size_t)-1; \
+        buf[p++] = (char)(ch); \
+    } while (0)
+
+    JSON_ESCAPE_PUT('"');
+    for (size_t i = 0; s[i]; i++) {
+        unsigned char c = (unsigned char)s[i];
         if (c == '"' || c == '\\') {
-            buf[p++] = '\\'; buf[p++] = c;
+            JSON_ESCAPE_PUT('\\'); JSON_ESCAPE_PUT(c);
         } else if (c == '\n') {
-            buf[p++] = '\\'; buf[p++] = 'n';
+            JSON_ESCAPE_PUT('\\'); JSON_ESCAPE_PUT('n');
         } else if (c == '\r') {
-            buf[p++] = '\\'; buf[p++] = 'r';
+            JSON_ESCAPE_PUT('\\'); JSON_ESCAPE_PUT('r');
         } else if (c == '\t') {
-            buf[p++] = '\\'; buf[p++] = 't';
+            JSON_ESCAPE_PUT('\\'); JSON_ESCAPE_PUT('t');
+        } else if (c < 0x20) {
+            char esc[7];
+            snprintf(esc, sizeof(esc), "\\u%04x", c);
+            for (int k = 0; k < 6; k++) JSON_ESCAPE_PUT(esc[k]);
         } else {
-            buf[p++] = c;
+            JSON_ESCAPE_PUT(c);
         }
     }
-    p += snprintf(buf + p, maxlen - p, "\"");
+    JSON_ESCAPE_PUT('"');
+    buf[p] = '\0';
+
+#undef JSON_ESCAPE_PUT
     return p;
 }
 
@@ -193,22 +226,30 @@ static int json_escape(char *buf, size_t maxlen, const char *s) {
  *
  * The buffer is sized dynamically off strlen(path) rather than using a
  * fixed-size stack buffer: json_escape() can expand its input by up to
- * ~2x+2 bytes (every character escaped), so a fixed buffer could overflow
- * or silently truncate a long or heavily-quoted path into a different,
- * valid-but-wrong request.
+ * 6x+2 bytes (every byte becomes a \u00XX escape), so a fixed buffer could
+ * overflow or silently truncate a long or heavily-escaped path into a
+ * different, valid-but-wrong request.
  *
  * Returns a malloc'd string (caller must free), or NULL on allocation
- * failure.
+ * failure OR if json_escape() reports it could not fit the escaped path
+ * within the buffer computed below (which should never happen given the
+ * sizing formula, but is checked defensively — see json_escape()'s
+ * contract). Either way, callers already treat a NULL return as -ENOMEM.
  */
 static char *build_path_request(const char *op, const char *path) {
-    size_t path_escaped_max = strlen(path) * 2 + 3; /* worst case: every byte escaped, plus quotes */
+    size_t path_escaped_max = strlen(path) * 6 + 3; /* worst case: every byte \u00XX-escaped, plus quotes */
     size_t reqsize = strlen(op) + path_escaped_max + 128;
     char *req = malloc(reqsize);
     if (!req) return NULL;
 
-    int rp = 0;
-    rp += snprintf(req + rp, reqsize - rp, "{\"op\":\"%s\",\"path\":", op);
-    rp += json_escape(req + rp, reqsize - rp, path);
+    size_t rp = 0;
+    rp += (size_t)snprintf(req + rp, reqsize - rp, "{\"op\":\"%s\",\"path\":", op);
+    size_t escaped = json_escape(req + rp, reqsize - rp, path);
+    if (escaped == (size_t)-1) {
+        free(req);
+        return NULL;
+    }
+    rp += escaped;
     snprintf(req + rp, reqsize - rp, "}");
     return req;
 }
@@ -469,9 +510,12 @@ static int crm_write(const char *path, const char *data, size_t size,
 
     /* Send data to daemon immediately for validation + persistence.
      * Bun's writeFileSync doesn't check close() errors, so we must
-     * validate here in the write() syscall where errors propagate. */
-    size_t path_escaped_max = strlen(path) * 2 + 3;
-    size_t data_escaped_max = wb->len * 2 + 3;
+     * validate here in the write() syscall where errors propagate.
+     *
+     * Sized for json_escape()'s worst case: every byte expands to a 6-byte
+     * \u00XX escape (see json_escape()'s doc comment). */
+    size_t path_escaped_max = strlen(path) * 6 + 3;
+    size_t data_escaped_max = wb->len * 6 + 3;
     size_t reqsize = path_escaped_max + data_escaped_max + 128;
     char *req = malloc(reqsize);
     if (!req) {
@@ -479,12 +523,24 @@ static int crm_write(const char *path, const char *data, size_t size,
         return -ENOMEM;
     }
 
-    int rp = 0;
-    rp += snprintf(req + rp, reqsize - rp, "{\"op\":\"write\",\"path\":");
-    rp += json_escape(req + rp, reqsize - rp, path);
-    rp += snprintf(req + rp, reqsize - rp, ",\"data\":");
-    rp += json_escape(req + rp, reqsize - rp, wb->data);
-    rp += snprintf(req + rp, reqsize - rp, "}");
+    size_t rp = 0;
+    rp += (size_t)snprintf(req + rp, reqsize - rp, "{\"op\":\"write\",\"path\":");
+    size_t path_escaped = json_escape(req + rp, reqsize - rp, path);
+    if (path_escaped == (size_t)-1) {
+        free(req);
+        pthread_mutex_unlock(&g_write_mutex);
+        return -EIO;
+    }
+    rp += path_escaped;
+    rp += (size_t)snprintf(req + rp, reqsize - rp, ",\"data\":");
+    size_t data_escaped = json_escape(req + rp, reqsize - rp, wb->data);
+    if (data_escaped == (size_t)-1) {
+        free(req);
+        pthread_mutex_unlock(&g_write_mutex);
+        return -EIO;
+    }
+    rp += data_escaped;
+    snprintf(req + rp, reqsize - rp, "}");
 
     pthread_mutex_unlock(&g_write_mutex);
 
@@ -523,9 +579,11 @@ static int crm_flush(const char *path, struct fuse_file_info *fi) {
         return 0;
     }
 
-    /* Send uncommitted data to daemon (fallback for multi-chunk writes) */
-    size_t path_escaped_max = strlen(path) * 2 + 3;
-    size_t data_escaped_max = wb->len * 2 + 3;
+    /* Send uncommitted data to daemon (fallback for multi-chunk writes).
+     * Sized for json_escape()'s worst case: every byte expands to a 6-byte
+     * \u00XX escape (see json_escape()'s doc comment). */
+    size_t path_escaped_max = strlen(path) * 6 + 3;
+    size_t data_escaped_max = wb->len * 6 + 3;
     size_t reqsize = path_escaped_max + data_escaped_max + 128;
     char *req = malloc(reqsize);
     if (!req) {
@@ -533,12 +591,24 @@ static int crm_flush(const char *path, struct fuse_file_info *fi) {
         return -ENOMEM;
     }
 
-    int rp = 0;
-    rp += snprintf(req + rp, reqsize - rp, "{\"op\":\"write\",\"path\":");
-    rp += json_escape(req + rp, reqsize - rp, path);
-    rp += snprintf(req + rp, reqsize - rp, ",\"data\":");
-    rp += json_escape(req + rp, reqsize - rp, wb->data);
-    rp += snprintf(req + rp, reqsize - rp, "}");
+    size_t rp = 0;
+    rp += (size_t)snprintf(req + rp, reqsize - rp, "{\"op\":\"write\",\"path\":");
+    size_t path_escaped = json_escape(req + rp, reqsize - rp, path);
+    if (path_escaped == (size_t)-1) {
+        free(req);
+        pthread_mutex_unlock(&g_write_mutex);
+        return -EIO;
+    }
+    rp += path_escaped;
+    rp += (size_t)snprintf(req + rp, reqsize - rp, ",\"data\":");
+    size_t data_escaped = json_escape(req + rp, reqsize - rp, wb->data);
+    if (data_escaped == (size_t)-1) {
+        free(req);
+        pthread_mutex_unlock(&g_write_mutex);
+        return -EIO;
+    }
+    rp += data_escaped;
+    snprintf(req + rp, reqsize - rp, "}");
 
     pthread_mutex_unlock(&g_write_mutex);
 

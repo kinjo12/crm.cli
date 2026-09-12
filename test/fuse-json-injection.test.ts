@@ -162,4 +162,61 @@ describe('fuse: JSON/protocol injection hardening', () => {
     expect(statThrew).toBe(true)
     expect(statErrorCode).toBe('ENOENT')
   })
+
+  // Issue #11 (gap 1): json_escape() only escaped '"', '\', '\n', '\r', '\t'.
+  // Every other control byte (0x00-0x1F) — e.g. 0x01 — passed through raw.
+  // A raw control byte embedded in a path segment is a byte FUSE hands us
+  // straight from the kernel (paths may contain any byte except NUL and
+  // '/'), and it lands unescaped inside the daemon's JSON request line.
+  //
+  // Per RFC 8259, raw control bytes are illegal inside a JSON string, so
+  // `JSON.parse` on the daemon side throws — but `processLine`'s try/catch
+  // turns that into a generic `{"error":"EIO"}` rather than a real answer
+  // about whether the path exists. This is a wire-format correctness gap,
+  // not a bypass (see PR #10 / Issue #3 for the actual injection fix), but
+  // it means paths containing bytes like 0x01 can never be looked up
+  // correctly through the mount.
+  //
+  // We distinguish RED from GREEN via the *error code*, not just success
+  // vs failure, since both outcomes throw for a nonexistent entity id:
+  //   - RED (raw byte, malformed JSON at the daemon): stat fails with EIO
+  //     (fuse-helper.c's json_get_errno() default for an unrecognized
+  //     "error" string).
+  //   - GREEN (byte escaped as the six-char backslash-u-0001 sequence,
+  //     valid JSON): the daemon parses the
+  //     request fine, correctly determines the id doesn't exist in the DB,
+  //     and returns the real, specific ENOENT.
+  test('a path segment containing a raw control byte must not corrupt the JSON wire format', () => {
+    if (skipIfNoFuse()) {
+      return
+    }
+    const mp = ctx!.mountPoint
+
+    // Filenames follow `<id>...<slug>.json` (see fuse-daemon.ts extractId()).
+    // Put the raw control byte in the slug half so `extractId()` still
+    // cleanly extracts a well-formed (but nonexistent) id before the daemon
+    // ever gets to JSON-parse the surrounding request.
+    const idPart = 'issue-11-nonexistent-id'
+    const slugPrefix = Buffer.from('ctrl-byte-')
+    const rawControlByte = Buffer.from([0x01])
+    const slugSuffix = Buffer.from('-slug.json')
+
+    const maliciousPath = Buffer.concat([
+      Buffer.from(`${mp}/contacts/${idPart}...`),
+      slugPrefix,
+      rawControlByte,
+      slugSuffix,
+    ])
+
+    let statErrorCode: string | undefined
+    try {
+      statSync(maliciousPath)
+    } catch (err) {
+      statErrorCode = (err as NodeJS.ErrnoException).code
+    }
+
+    // On unpatched fuse-helper.c this is 'EIO' (malformed JSON at the
+    // daemon). On fixed code it must be the real, specific 'ENOENT'.
+    expect(statErrorCode).toBe('ENOENT')
+  })
 })
