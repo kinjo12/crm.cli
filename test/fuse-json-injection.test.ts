@@ -2,7 +2,12 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { canMount, createTestContext, type TestContext } from './helpers.ts'
+import {
+  canMount,
+  cleanupStaleFuseMounts,
+  createTestContext,
+  type TestContext,
+} from './helpers.ts'
 
 /**
  * Regression coverage for the fuse-helper.c JSON injection vulnerability:
@@ -38,6 +43,11 @@ beforeAll(() => {
   if (!canMount) {
     return
   }
+  // Clean up stale FUSE mounts/processes left behind by a previously
+  // interrupted test run — this file can't rely on fuse.test.ts's
+  // module-level cleanup having already run, since Bun does not guarantee
+  // cross-file test execution order.
+  cleanupStaleFuseMounts()
   const c = createTestContext() as FuseTestContext
   c.mountPoint = join(c.dir, 'mnt')
   mkdirSync(c.mountPoint)
