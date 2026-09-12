@@ -27,6 +27,7 @@ import { ulid } from 'ulid'
 
 import { type CRMConfig, loadConfig } from './config'
 import { type DB, openDB, removeSearchIndex } from './db'
+import type { Activity, Company, Contact, Deal } from './drizzle-schema'
 import * as schema from './drizzle-schema'
 import { safeJSON } from './format'
 import {
@@ -42,6 +43,7 @@ import {
 } from './fuse-json'
 import { getOrCreateCompanyId } from './lib/helpers'
 import { normalizePhone } from './normalize'
+import { sanitizeFilenameSegment } from './path-safety'
 import {
   computeConversion,
   computeForecast,
@@ -206,7 +208,10 @@ async function handleRequest(
 
 // Computes actual file size via handleRead — without this, FUSE reports
 // st_size=65536 and the NFS/FUSE client zero-pads reads to that size.
-async function handleGetattr(
+//
+// Exported for direct testing (bypassing the Unix-socket protocol/live FUSE
+// mount) — see test/fuse-daemon-extractid-fallback.test.ts.
+export async function handleGetattr(
   db: DB,
   config: CRMConfig,
   p: string,
@@ -349,6 +354,85 @@ async function _handleGetattr(
   return { error: 'ENOENT' }
 }
 
+// ── extractId-based entity lookups ──
+//
+// `extractId()` pulls the id portion out of a filesystem path segment. For
+// normal listings that id is the *sanitized* id embedded in the filename by
+// `contactFilename()`/`companyFilename()`/`dealFilename()`/`activityFilename()`
+// (see fuse-json.ts). `sanitizeFilenameSegment()` is a no-op for every id
+// generated internally via `makeId()`, so `id` below is byte-identical to the
+// raw primary key for 100% of normal usage — the `eq()` exact match below
+// handles that case with a single indexed lookup, no behavior change.
+//
+// The only time the exact match can miss is a record with an adversarial id
+// (reachable only via `crm import` or direct DB manipulation, never via this
+// CLI's own validated commands — see SECURITY.md / Issue #9): such a record
+// lists correctly with a sanitized, safe filename, but the raw id stored in
+// the DB no longer equals the sanitized id extracted from that filename. The
+// fallback full-table scan below (mirroring the existing `_by-website`/
+// `_by-phone` company lookup pattern elsewhere in this file) recovers that
+// record by comparing `sanitizeFilenameSegment(record.id)` against the
+// extracted id, so `stat`/`cat`/`rm` of a listed path never 404s just because
+// its id needed sanitizing. This is a personal CRM with small data volumes,
+// so a full scan on the (rare) fallback path is an acceptable tradeoff for
+// closing this defense-in-depth gap.
+async function findContactById(
+  db: DB,
+  id: string,
+): Promise<Contact | undefined> {
+  const exact = await db
+    .select()
+    .from(schema.contacts)
+    .where(eq(schema.contacts.id, id))
+  if (exact[0]) {
+    return exact[0]
+  }
+  const all = await db.select().from(schema.contacts)
+  return all.find((c) => sanitizeFilenameSegment(c.id) === id)
+}
+
+async function findCompanyById(
+  db: DB,
+  id: string,
+): Promise<Company | undefined> {
+  const exact = await db
+    .select()
+    .from(schema.companies)
+    .where(eq(schema.companies.id, id))
+  if (exact[0]) {
+    return exact[0]
+  }
+  const all = await db.select().from(schema.companies)
+  return all.find((co) => sanitizeFilenameSegment(co.id) === id)
+}
+
+async function findDealById(db: DB, id: string): Promise<Deal | undefined> {
+  const exact = await db
+    .select()
+    .from(schema.deals)
+    .where(eq(schema.deals.id, id))
+  if (exact[0]) {
+    return exact[0]
+  }
+  const all = await db.select().from(schema.deals)
+  return all.find((d) => sanitizeFilenameSegment(d.id) === id)
+}
+
+async function findActivityById(
+  db: DB,
+  id: string,
+): Promise<Activity | undefined> {
+  const exact = await db
+    .select()
+    .from(schema.activities)
+    .where(eq(schema.activities.id, id))
+  if (exact[0]) {
+    return exact[0]
+  }
+  const all = await db.select().from(schema.activities)
+  return all.find((a) => sanitizeFilenameSegment(a.id) === id)
+}
+
 async function entityExists(
   db: DB,
   entityDir: string,
@@ -356,34 +440,14 @@ async function entityExists(
 ): Promise<boolean> {
   // Check entity existence by querying the specific table
   switch (entityDir) {
-    case 'contacts': {
-      const r = await db
-        .select({ id: schema.contacts.id })
-        .from(schema.contacts)
-        .where(eq(schema.contacts.id, id))
-      return r.length > 0
-    }
-    case 'companies': {
-      const r = await db
-        .select({ id: schema.companies.id })
-        .from(schema.companies)
-        .where(eq(schema.companies.id, id))
-      return r.length > 0
-    }
-    case 'deals': {
-      const r = await db
-        .select({ id: schema.deals.id })
-        .from(schema.deals)
-        .where(eq(schema.deals.id, id))
-      return r.length > 0
-    }
-    case 'activities': {
-      const r = await db
-        .select({ id: schema.activities.id })
-        .from(schema.activities)
-        .where(eq(schema.activities.id, id))
-      return r.length > 0
-    }
+    case 'contacts':
+      return (await findContactById(db, id)) !== undefined
+    case 'companies':
+      return (await findCompanyById(db, id)) !== undefined
+    case 'deals':
+      return (await findDealById(db, id)) !== undefined
+    case 'activities':
+      return (await findActivityById(db, id)) !== undefined
     default:
       return false
   }
@@ -727,7 +791,9 @@ export async function handleReaddir(
 
 // ── read ──
 
-async function handleRead(
+// Exported for direct testing (bypassing the Unix-socket protocol/live FUSE
+// mount) — see test/fuse-daemon-extractid-fallback.test.ts.
+export async function handleRead(
   db: DB,
   config: CRMConfig,
   p: string,
@@ -885,30 +951,24 @@ async function readContactPath(
     const file = sub.slice(lastSlash + 1)
     const id = extractId(file)
     if (id) {
-      const results = await db
-        .select()
-        .from(schema.contacts)
-        .where(eq(schema.contacts.id, id))
-      if (!results[0]) {
+      const contact = await findContactById(db, id)
+      if (!contact) {
         return { error: 'ENOENT' }
       }
       return {
-        data: JSON.stringify(await buildContactJSON(db, results[0], config)),
+        data: JSON.stringify(await buildContactJSON(db, contact, config)),
       }
     }
   }
   // Direct file: <id>...slug.json
   const id = extractId(sub)
   if (id) {
-    const results = await db
-      .select()
-      .from(schema.contacts)
-      .where(eq(schema.contacts.id, id))
-    if (!results[0]) {
+    const contact = await findContactById(db, id)
+    if (!contact) {
       return { error: 'ENOENT' }
     }
     return {
-      data: JSON.stringify(await buildContactJSON(db, results[0], config)),
+      data: JSON.stringify(await buildContactJSON(db, contact, config)),
     }
   }
   return { error: 'ENOENT' }
@@ -940,14 +1000,11 @@ async function readCompanyPath(
   }
   const id = extractId(sub)
   if (id) {
-    const results = await db
-      .select()
-      .from(schema.companies)
-      .where(eq(schema.companies.id, id))
-    if (!results[0]) {
+    const company = await findCompanyById(db, id)
+    if (!company) {
       return { error: 'ENOENT' }
     }
-    return { data: JSON.stringify(await buildCompanyJSON(db, results[0])) }
+    return { data: JSON.stringify(await buildCompanyJSON(db, company)) }
   }
   return { error: 'ENOENT' }
 }
@@ -964,27 +1021,21 @@ async function readDealPath(
       const file = rest.slice(slash + 1)
       const id = extractId(file)
       if (id) {
-        const results = await db
-          .select()
-          .from(schema.deals)
-          .where(eq(schema.deals.id, id))
-        if (!results[0]) {
+        const deal = await findDealById(db, id)
+        if (!deal) {
           return { error: 'ENOENT' }
         }
-        return { data: JSON.stringify(await buildDealJSON(db, results[0])) }
+        return { data: JSON.stringify(await buildDealJSON(db, deal)) }
       }
     }
   }
   const id = extractId(sub)
   if (id) {
-    const results = await db
-      .select()
-      .from(schema.deals)
-      .where(eq(schema.deals.id, id))
-    if (!results[0]) {
+    const deal = await findDealById(db, id)
+    if (!deal) {
       return { error: 'ENOENT' }
     }
-    return { data: JSON.stringify(await buildDealJSON(db, results[0])) }
+    return { data: JSON.stringify(await buildDealJSON(db, deal)) }
   }
   return { error: 'ENOENT' }
 }
@@ -995,14 +1046,11 @@ async function readActivityPath(
 ): Promise<Record<string, unknown>> {
   const id = extractId(sub)
   if (id) {
-    const results = await db
-      .select()
-      .from(schema.activities)
-      .where(eq(schema.activities.id, id))
-    if (!results[0]) {
+    const activity = await findActivityById(db, id)
+    if (!activity) {
       return { error: 'ENOENT' }
     }
-    return { data: JSON.stringify(buildActivityJSON(results[0])) }
+    return { data: JSON.stringify(buildActivityJSON(activity)) }
   }
   return { error: 'ENOENT' }
 }
@@ -1506,7 +1554,9 @@ async function writeActivity(
 
 // ── unlink ──
 
-async function handleUnlink(
+// Exported for direct testing (bypassing the Unix-socket protocol/live FUSE
+// mount) — see test/fuse-daemon-extractid-fallback.test.ts.
+export async function handleUnlink(
   db: DB,
   p: string,
 ): Promise<Record<string, unknown>> {
@@ -1523,8 +1573,10 @@ async function handleUnlink(
     const file = p.slice('contacts/'.length)
     const id = extractId(file)
     if (id) {
-      await db.delete(schema.contacts).where(eq(schema.contacts.id, id))
-      await removeSearchIndex(db, id)
+      const contact = await findContactById(db, id)
+      const deleteId = contact?.id ?? id
+      await db.delete(schema.contacts).where(eq(schema.contacts.id, deleteId))
+      await removeSearchIndex(db, deleteId)
       return { ok: true }
     }
   }
@@ -1533,8 +1585,10 @@ async function handleUnlink(
     const file = p.slice('companies/'.length)
     const id = extractId(file)
     if (id) {
-      await db.delete(schema.companies).where(eq(schema.companies.id, id))
-      await removeSearchIndex(db, id)
+      const company = await findCompanyById(db, id)
+      const deleteId = company?.id ?? id
+      await db.delete(schema.companies).where(eq(schema.companies.id, deleteId))
+      await removeSearchIndex(db, deleteId)
       return { ok: true }
     }
   }
@@ -1543,8 +1597,10 @@ async function handleUnlink(
     const file = p.slice('deals/'.length)
     const id = extractId(file)
     if (id) {
-      await db.delete(schema.deals).where(eq(schema.deals.id, id))
-      await removeSearchIndex(db, id)
+      const deal = await findDealById(db, id)
+      const deleteId = deal?.id ?? id
+      await db.delete(schema.deals).where(eq(schema.deals.id, deleteId))
+      await removeSearchIndex(db, deleteId)
       return { ok: true }
     }
   }
@@ -1553,8 +1609,12 @@ async function handleUnlink(
     const file = p.slice('activities/'.length)
     const id = extractId(file)
     if (id) {
-      await db.delete(schema.activities).where(eq(schema.activities.id, id))
-      await removeSearchIndex(db, id)
+      const activity = await findActivityById(db, id)
+      const deleteId = activity?.id ?? id
+      await db
+        .delete(schema.activities)
+        .where(eq(schema.activities.id, deleteId))
+      await removeSearchIndex(db, deleteId)
       return { ok: true }
     }
   }
