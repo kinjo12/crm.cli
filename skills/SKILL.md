@@ -463,6 +463,8 @@ Entity data is passed as JSON on stdin. Pre-hooks abort on non-zero exit.
 
 Available hooks: `{pre,post}-{contact,company,deal}-{add,edit,rm}`, `{pre,post}-deal-stage-change`, `{pre,post}-activity-add`.
 
+Hooks in an implicitly-discovered `crm.toml` (not passed via `--config`/`CRM_CONFIG`) require trust-on-first-use: interactively you'll be prompted once (approval is remembered by path + content hash); non-interactively an untrusted hook is skipped with a warning rather than run silently. Run `crm config trust ./crm.toml` to trust one ahead of time. Configs passed explicitly via `--config`/`CRM_CONFIG` are exempt.
+
 ## Tips for AI Agents
 
 - **Mount first:** `crm mount ~/crm` gives you filesystem access — read JSON files directly instead of running CLI commands

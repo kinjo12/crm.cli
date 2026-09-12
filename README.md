@@ -796,6 +796,22 @@ Available hooks:
 
 - `pre-*` / `post-*` for: `contact-add`, `contact-edit`, `contact-rm`, `company-add`, `company-edit`, `company-rm`, `deal-add`, `deal-edit`, `deal-rm`, `deal-stage-change`, `activity-add`
 
+#### Trust on first use
+
+Hooks are shell commands, so a `crm.toml` picked up via the implicit discovery walk (i.e. not passed via `--config` or `CRM_CONFIG`) could belong to an ancestor directory you don't fully control. Its `[hooks]` therefore require explicit trust before they run — the same model direnv/mise use for `.envrc`/`.mise.toml`:
+
+- On first use, if you're at an interactive terminal, crm prompts: run this hook once and remember the file (path + content hash), or skip it.
+- Non-interactively (CI, scripts, no TTY) an untrusted hook is always skipped — the command still completes normally, and a warning is printed to stderr telling you which config to trust.
+- If a trusted `crm.toml`'s content later changes, trust is invalidated (the hash no longer matches) and it must be re-trusted.
+- A config supplied explicitly via `--config <path>` or `CRM_CONFIG` is a deliberate action and its hooks always run — no trust step.
+
+```bash
+crm config trust ./crm.toml     # trust a config's hooks; omit the path to trust whatever config would be auto-resolved
+crm config untrust ./crm.toml   # revoke trust
+```
+
+Trust decisions are stored locally in `~/.crm/trusted_configs.json` (path → content hash only — never config content, and never read as a config source itself).
+
 ---
 
 ## Custom Fields
