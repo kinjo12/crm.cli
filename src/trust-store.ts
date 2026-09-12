@@ -1,13 +1,14 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import {
   existsSync,
   mkdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   writeFileSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 
 /**
  * Local trust-on-first-use (TOFU) ledger for implicitly-discovered
@@ -61,9 +62,36 @@ function loadTrustStore(): TrustStoreData {
   return {}
 }
 
+/**
+ * Write `data` to `targetPath` via write-temp-then-rename: the bytes are
+ * first written in full to a throwaway sibling file in the same directory
+ * (so the rename below is same-volume, hence atomic), then that sibling is
+ * renamed over `targetPath`. This closes two failure modes a direct
+ * `writeFileSync(targetPath, ...)` has: two concurrent writers racing each
+ * other can no longer interleave their writes into a single corrupt file
+ * (each writer's full content lands atomically, last rename wins cleanly),
+ * and a process killed mid-write can no longer leave `targetPath` truncated
+ * — at every point in time `targetPath` holds either its previous complete
+ * content or its new complete content, never a partial write.
+ *
+ * On POSIX, `rename()` is atomic when source and destination are on the
+ * same filesystem. On Windows, `fs.renameSync` is likewise atomic for
+ * same-volume renames — guaranteed here since the temp file is always
+ * created next to `targetPath`.
+ */
+export function atomicWriteFileSync(targetPath: string, data: string): void {
+  const dir = dirname(targetPath)
+  const tmpPath = join(
+    dir,
+    `.${basename(targetPath)}.${process.pid}-${randomBytes(6).toString('hex')}.tmp`,
+  )
+  writeFileSync(tmpPath, data)
+  renameSync(tmpPath, targetPath)
+}
+
 function saveTrustStore(store: TrustStoreData): void {
   mkdirSync(dirname(TRUST_STORE_PATH), { recursive: true })
-  writeFileSync(TRUST_STORE_PATH, `${JSON.stringify(store, null, 2)}\n`)
+  atomicWriteFileSync(TRUST_STORE_PATH, `${JSON.stringify(store, null, 2)}\n`)
 }
 
 /**
@@ -71,6 +99,10 @@ function saveTrustStore(store: TrustStoreData): void {
  * recorded trust entry. Returns `false` if the file was never trusted, no
  * longer exists, or its content has changed since it was trusted (hash
  * mismatch = untrusted, forcing re-trust).
+ *
+ * Re-reads the file independently — do not use this where the trust check
+ * and the executed/parsed content must come from the same read; see
+ * `isTrustedContent`/`trustConfigContent` instead.
  */
 export function isTrusted(configPath: string): boolean {
   if (!existsSync(configPath)) {
@@ -88,7 +120,13 @@ export function isTrusted(configPath: string): boolean {
   }
 }
 
-/** Record `configPath`'s current content hash as trusted. */
+/**
+ * Record `configPath`'s current content hash as trusted.
+ *
+ * Re-reads the file independently — do not use this where the trust check
+ * and the executed/parsed content must come from the same read; see
+ * `isTrustedContent`/`trustConfigContent` instead.
+ */
 export function trustConfig(configPath: string): void {
   trustConfigContent(configPath, readFileSync(configPath))
 }
