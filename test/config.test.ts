@@ -1096,3 +1096,76 @@ describe('config: malformed TOML warning', () => {
     expect(result.exitCode).toBe(0)
   })
 })
+
+describe('config: explicit path missing', () => {
+  test('--config <nonexistent path> fails with a clear error', () => {
+    const ctx = createTestContext({ noConfig: true })
+    const missingPath = join(ctx.dir, 'does-not-exist.toml')
+
+    const result = ctx.runFail(
+      '--config',
+      missingPath,
+      'contact',
+      'add',
+      '--name',
+      'Test',
+    )
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain('config file not found')
+    expect(result.stderr).toContain(missingPath)
+    expect(result.stderr).not.toContain('could not parse config file')
+    expect(result.stderr).not.toContain('Warning')
+  })
+
+  test('CRM_CONFIG=<nonexistent path> fails with a clear error', () => {
+    const ctx = createTestContext({ noConfig: true })
+    const missingPath = join(ctx.dir, 'does-not-exist.toml')
+
+    const result = ctx.runWithEnv(
+      { CRM_CONFIG: missingPath },
+      'contact',
+      'add',
+      '--name',
+      'Test',
+    )
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain('config file not found')
+    expect(result.stderr).toContain(missingPath)
+    expect(result.stderr).not.toContain('could not parse config file')
+    expect(result.stderr).not.toContain('Warning')
+  })
+
+  test('--config <a directory> fails with a clear error instead of silently falling back to defaults', () => {
+    const ctx = createTestContext({ noConfig: true })
+    const dirAsConfigPath = join(ctx.dir, 'not-a-file.toml')
+    mkdirSync(dirAsConfigPath)
+
+    const result = ctx.runFail(
+      '--config',
+      dirAsConfigPath,
+      'contact',
+      'add',
+      '--name',
+      'Test',
+    )
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain('config file not found')
+    expect(result.stderr).toContain(dirAsConfigPath)
+    expect(result.stderr).not.toContain('could not parse config file')
+    expect(result.stderr).not.toContain('Warning')
+  })
+})
+
+describe('config resolution: implicit-vs-explicit missing-path asymmetry', () => {
+  test('implicit search finding nothing still auto-creates a default config instead of failing', () => {
+    const ctx = createTestContext({ noConfig: true })
+
+    // No --config flag, no CRM_CONFIG env var, and no crm.toml anywhere —
+    // this is the "implicit" resolution path (source === 'none' before
+    // auto-create). Unlike a missing *explicit* path, this must NOT hard
+    // fail: it should keep auto-creating a default config as before.
+    const result = ctx.run('contact', 'add', '--name', 'Test')
+    expect(result.exitCode).toBe(0)
+    expect(existsSync(join(ctx.dir, 'crm.toml'))).toBe(true)
+  })
+})

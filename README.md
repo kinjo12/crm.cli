@@ -2,7 +2,7 @@
 
 ![crm.cli — Your CRM is a filesystem](assets/cover.png)
 
-> **This is a security-hardened fork.** [kinjo12/crm.cli](https://github.com/kinjo12/crm.cli) fixes several vulnerabilities found in [the upstream project](https://github.com/dzhng/crm.cli). See [CHANGELOG.md](CHANGELOG.md) for what changed and [SECURITY.md](SECURITY.md) for details on each fixed vulnerability. Everything else in this README describes the CRM itself and applies to this fork unchanged.
+> **This is a security-hardened fork.** [kinjo12/crm.cli](https://github.com/kinjo12/crm.cli) fixes several vulnerabilities, along with other correctness issues, found in [the upstream project](https://github.com/dzhng/crm.cli). See [CHANGELOG.md](CHANGELOG.md) for what changed and [SECURITY.md](SECURITY.md) for details on each fixed vulnerability. Everything else in this README describes the CRM itself and applies to this fork unchanged.
 
 **A headless, CLI-first CRM for AI native companies.** Contacts, deals, and pipeline in a single SQLite file — queryable from your terminal, composable with Unix tools, and mountable as a virtual filesystem so any tool that reads files (Claude Code, Codex, grep, jq, vim) has full CRM access without any integration.
 
@@ -86,6 +86,8 @@ Config is loaded from `crm.toml`. Resolution order (first match wins):
 4. If CWD isn't inside a git repository at all, only `./crm.toml` is checked (no upward walk)
 
 There is no global `~/.crm/config.toml` fallback — config is always scoped to the current project. This means you can drop a `crm.toml` in your project root and it applies to everyone working in that directory — just like `.gitignore` or `biome.jsonc`.
+
+If you explicitly point to a config via `--config <path>` or `CRM_CONFIG`, that path must exist — `crm` exits with an error (`config file not found: <path>`) rather than silently falling back to defaults. This does not apply to implicit discovery (steps 3-4 above): if no `crm.toml` is found by walking up from CWD, `crm` auto-creates a default one on first run.
 
 ```bash
 # Project-scoped config

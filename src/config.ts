@@ -1,5 +1,11 @@
 import { execSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 
@@ -274,6 +280,23 @@ export function loadConfig(opts: {
   const resolved = resolveConfigPath(opts.configPath)
   let configPath: string | null = resolved.path
   let source: ConfigSource = resolved.source
+
+  // An explicitly specified `--config`/`CRM_CONFIG` path that doesn't exist
+  // — or that exists but isn't a regular file (e.g. a directory) — must fail
+  // loudly rather than silently falling back to defaults — unlike implicit
+  // discovery (source === 'none'), which auto-creates a default config
+  // below. Without this, a missing/non-file explicit path would fall
+  // through to the readFileSync/parse block, throw ENOENT/EISDIR, get
+  // caught by the generic parse-error handler, and print a misleading
+  // "could not parse" warning while quietly using defaults.
+  if (
+    source === 'explicit' &&
+    configPath &&
+    !(existsSync(configPath) && statSync(configPath).isFile())
+  ) {
+    console.error(`Error: config file not found: ${configPath}`)
+    process.exit(1)
+  }
 
   if (!configPath) {
     // `resolveConfigPath` already computed this root while searching for an
