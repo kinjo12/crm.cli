@@ -52,7 +52,7 @@ display = "international"
 default_path = "~/crm"
 ```
 
-Config is auto-discovered by walking up from the current directory, but never past the current git repository's root (if CWD isn't inside a git repository, only the current directory is checked). There is no global `~/.crm/config.toml` fallback. Override with `--config <path>` or `CRM_CONFIG` env var.
+Config is auto-discovered by walking up from the current directory, but never past the current git repository's root (if CWD isn't inside a git repository, only the current directory is checked). There is no global `~/.crm/config.toml` fallback. Override with `--config <path>` or `CRM_CONFIG` env var — if given, that path must exist or `crm` exits with an error (it will not silently fall back to defaults).
 
 ## Global Flags
 

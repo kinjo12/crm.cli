@@ -275,6 +275,18 @@ export function loadConfig(opts: {
   let configPath: string | null = resolved.path
   let source: ConfigSource = resolved.source
 
+  // An explicitly specified `--config`/`CRM_CONFIG` path that doesn't exist
+  // must fail loudly rather than silently falling back to defaults — unlike
+  // implicit discovery (source === 'none'), which auto-creates a default
+  // config below. Without this, a missing explicit path would fall through
+  // to the readFileSync/parse block, throw ENOENT, get caught by the
+  // generic parse-error handler, and print a misleading "could not parse"
+  // warning while quietly using defaults.
+  if (source === 'explicit' && configPath && !existsSync(configPath)) {
+    console.error(`Error: config file not found: ${configPath}`)
+    process.exit(1)
+  }
+
   if (!configPath) {
     // `resolveConfigPath` already computed this root while searching for an
     // implicit config and found none (source === 'none' whenever
