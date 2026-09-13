@@ -1134,6 +1134,26 @@ describe('config: explicit path missing', () => {
     expect(result.stderr).not.toContain('could not parse config file')
     expect(result.stderr).not.toContain('Warning')
   })
+
+  test('--config <a directory> fails with a clear error instead of silently falling back to defaults', () => {
+    const ctx = createTestContext({ noConfig: true })
+    const dirAsConfigPath = join(ctx.dir, 'not-a-file.toml')
+    mkdirSync(dirAsConfigPath)
+
+    const result = ctx.runFail(
+      '--config',
+      dirAsConfigPath,
+      'contact',
+      'add',
+      '--name',
+      'Test',
+    )
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain('config file not found')
+    expect(result.stderr).toContain(dirAsConfigPath)
+    expect(result.stderr).not.toContain('could not parse config file')
+    expect(result.stderr).not.toContain('Warning')
+  })
 })
 
 describe('config resolution: implicit-vs-explicit missing-path asymmetry', () => {
