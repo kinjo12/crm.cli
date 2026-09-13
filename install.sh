@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-REPO="dzhng/crm.cli"
+REPO="kinjo12/crm.cli"
 INSTALL_DIR="${CRM_INSTALL_DIR:-$HOME/.local/bin}"
 
 usage() {
@@ -51,10 +51,50 @@ esac
 
 echo "Detected platform: ${PLATFORM}-${ARCH}"
 
+install_mount_deps() {
+  echo ""
+  echo "Installing mount dependencies..."
+  case "$PLATFORM" in
+    linux)
+      if command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get install -y libfuse3-dev libsqlite3-dev
+      elif command -v yum >/dev/null 2>&1; then
+        sudo yum install -y fuse3-devel sqlite-devel
+      elif command -v pacman >/dev/null 2>&1; then
+        sudo pacman -S --noconfirm fuse3 sqlite
+      else
+        echo "Warning: could not detect package manager. Install libfuse3-dev and libsqlite3-dev manually."
+      fi
+      ;;
+    darwin)
+      if command -v cargo >/dev/null 2>&1; then
+        echo "Rust toolchain found."
+      else
+        echo "Installing Rust toolchain (needed for NFS server on macOS)..."
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        . "$HOME/.cargo/env"
+      fi
+      ;;
+  esac
+}
+
 # Get latest release tag
 LATEST=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
 if [ -z "$LATEST" ]; then
-  echo "Error: could not determine latest release"
+  echo "This fork ($REPO) does not currently publish precompiled releases."
+  echo ""
+  echo "Build from source instead:"
+  echo "  git clone https://github.com/$REPO.git"
+  echo "  cd crm.cli"
+  echo "  bun install"
+  echo "  bun run build"
+  echo "  mkdir -p \"$INSTALL_DIR\""
+  echo "  ln -sf \"\$(pwd)/dist/cli.js\" \"$INSTALL_DIR/crm\""
+  echo "  chmod +x \"$INSTALL_DIR/crm\""
+  echo ""
+  echo "(NOTE: this does not silently fall back to installing upstream's dzhng/crm.cli binary,"
+  echo "which would not include this fork's fixes.)"
+  install_mount_deps
   exit 1
 fi
 echo "Latest release: $LATEST"
@@ -87,31 +127,7 @@ case ":$PATH:" in
     ;;
 esac
 
-# Install FUSE dependencies
-echo ""
-echo "Installing mount dependencies..."
-case "$PLATFORM" in
-  linux)
-    if command -v apt-get >/dev/null 2>&1; then
-      sudo apt-get install -y libfuse3-dev libsqlite3-dev
-    elif command -v yum >/dev/null 2>&1; then
-      sudo yum install -y fuse3-devel sqlite-devel
-    elif command -v pacman >/dev/null 2>&1; then
-      sudo pacman -S --noconfirm fuse3 sqlite
-    else
-      echo "Warning: could not detect package manager. Install libfuse3-dev and libsqlite3-dev manually."
-    fi
-    ;;
-  darwin)
-    if command -v cargo >/dev/null 2>&1; then
-      echo "Rust toolchain found."
-    else
-      echo "Installing Rust toolchain (needed for NFS server on macOS)..."
-      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-      . "$HOME/.cargo/env"
-    fi
-    ;;
-esac
+install_mount_deps
 
 echo ""
 echo "crm.cli installed successfully!"
