@@ -1,7 +1,7 @@
 ---
 name: crm-cli
 description: Manage contacts, companies, deals, and pipeline with crm.cli — a headless CLI-first CRM backed by SQLite with a virtual filesystem interface
-install: curl -fsSL https://raw.githubusercontent.com/kinjo12/crm.cli/main/install.sh | sh
+install: git clone https://github.com/kinjo12/crm.cli.git && cd crm.cli && bun install && bun run build && mkdir -p ~/.local/bin && ln -sf "$(pwd)/dist/cli.js" ~/.local/bin/crm && chmod +x ~/.local/bin/crm
 ---
 
 # crm.cli

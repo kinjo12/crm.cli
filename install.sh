@@ -81,7 +81,8 @@ install_mount_deps() {
 # Get latest release tag
 LATEST=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
 if [ -z "$LATEST" ]; then
-  echo "This fork ($REPO) does not currently publish precompiled releases."
+  echo "Could not find a release for $REPO (this fork does not currently publish"
+  echo "precompiled releases; this can also happen if the GitHub API request failed)."
   echo ""
   echo "Build from source instead:"
   echo "  git clone https://github.com/$REPO.git"
@@ -94,6 +95,8 @@ if [ -z "$LATEST" ]; then
   echo ""
   echo "(NOTE: this does not silently fall back to installing upstream's dzhng/crm.cli binary,"
   echo "which would not include this fork's fixes.)"
+  # Install mount deps here too (not just the success path below): they're useful prep
+  # for the build-from-source flow above regardless of why the release lookup failed.
   install_mount_deps
   exit 1
 fi
