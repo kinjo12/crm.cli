@@ -6,7 +6,7 @@
 
 **A headless, CLI-first CRM for AI native companies.** Contacts, deals, and pipeline in a single SQLite file — queryable from your terminal, composable with Unix tools, and mountable as a virtual filesystem so any tool that reads files (Claude Code, Codex, grep, jq, vim) has full CRM access without any integration.
 
-No server. No Docker. No accounts. No GUI. Just `npm install -g @dzhng/crm.cli` and go.
+No server. No Docker. No accounts. No GUI. Just clone, build, and go — see [Install](#install) below.
 
 > **Created by [Duet](https://duet.so)** — a cloud agent workspace with persistent AI. Set up crm.cli in your own private cloud computer and run it with Claude Code or Codex — no local setup required. [Try Duet &rarr;](https://duet.so)
 
@@ -45,12 +45,30 @@ crm dupes --threshold 0.5
 
 ## Install
 
-```bash
-npm install -g @dzhng/crm.cli
-# or: bun install -g @dzhng/crm.cli
+> **This fork does not publish an npm package or GitHub Releases.** The upstream project
+> (`@dzhng/crm.cli`, `dzhng/crm.cli`) does — running `npm install -g @dzhng/crm.cli` or the
+> upstream `install.sh` installs the *unpatched* original, not this fork's fixes. Build from
+> source instead:
 
-# Or install the compiled binary
-curl -fsSL https://raw.githubusercontent.com/dzhng/crm.cli/main/install.sh | sh
+```bash
+git clone https://github.com/kinjo12/crm.cli.git
+cd crm.cli
+bun install
+bun run build
+# dist/cli.js is the entry point (keeps its #!/usr/bin/env node shebang) — symlink or wrap it
+# onto your PATH as `crm`, e.g.:
+mkdir -p ~/.local/bin
+ln -sf "$(pwd)/dist/cli.js" ~/.local/bin/crm
+chmod +x ~/.local/bin/crm
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+`install.sh` in this repo still works as a platform/FUSE-dependency helper, but it will tell you
+to build from source rather than silently falling back to an upstream binary if no release exists
+for this fork:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kinjo12/crm.cli/main/install.sh | sh
 ```
 
 ### Install as an AI agent skill
@@ -59,7 +77,7 @@ Point your agent at the [skills folder](./skills) to give it full CRM knowledge 
 
 ```bash
 # Claude Code / Duet — install the skill from GitHub
-claude skills add https://github.com/dzhng/crm.cli/tree/main/skills
+claude skills add https://github.com/kinjo12/crm.cli/tree/main/skills
 
 # Or copy skills/SKILL.md into your agent's skills directory
 cp skills/SKILL.md ~/.your-agent/skills/crm-cli/SKILL.md
@@ -1298,6 +1316,12 @@ search_limit = 20               # max results for search/ virtual files
 
 ## Distribution
 
+> **This section describes upstream's (`dzhng/crm.cli`) distribution pipeline.** This fork does
+> not publish to npm or GitHub Releases — see [Install](#install) above for how to actually get
+> this fork. The subsections below are kept for reference (e.g. if this fork's CI is later set up
+> to mirror them) but none of the `npm install`/download-a-release commands below install this
+> fork's code today.
+
 ### Package Manager
 
 ```bash
@@ -1330,13 +1354,17 @@ The install script (`install.sh`) handles:
    - Linux: `libfuse3-dev` via apt/yum/pacman
    - macOS: `macfuse` via Homebrew
 
+This fork's copy of `install.sh` points at `kinjo12/crm.cli` and, since this fork has no
+published releases, prints build-from-source instructions instead of silently downloading
+upstream's binary:
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dzhng/crm.cli/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/kinjo12/crm.cli/main/install.sh | sh
 ```
 
 ### CI/CD
 
-GitHub Actions pipeline:
+GitHub Actions pipeline (upstream; this fork does not currently run the tag/publish steps below):
 
 - **On push to main:** Run all tests via `bun test`
 - **On tag (`v*`):** Build binaries for all platforms, publish to npm, create GitHub Release with assets

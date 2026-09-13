@@ -1,7 +1,7 @@
 ---
 name: crm-cli
 description: Manage contacts, companies, deals, and pipeline with crm.cli — a headless CLI-first CRM backed by SQLite with a virtual filesystem interface
-install: curl -fsSL https://raw.githubusercontent.com/dzhng/crm.cli/main/install.sh | sh
+install: git clone https://github.com/kinjo12/crm.cli.git && cd crm.cli && bun install && bun run build && mkdir -p ~/.local/bin && ln -sf "$(pwd)/dist/cli.js" ~/.local/bin/crm && chmod +x ~/.local/bin/crm
 ---
 
 # crm.cli
@@ -10,11 +10,26 @@ A headless, CLI-first CRM. Contacts, deals, and pipeline in a single SQLite file
 
 ## Install
 
+This fork (`kinjo12/crm.cli`) does not publish precompiled releases. Build from source:
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dzhng/crm.cli/main/install.sh | sh
+git clone https://github.com/kinjo12/crm.cli.git
+cd crm.cli
+bun install
+bun run build
+mkdir -p ~/.local/bin
+ln -sf "$(pwd)/dist/cli.js" ~/.local/bin/crm
+chmod +x ~/.local/bin/crm
 ```
 
-This downloads the precompiled binary to `~/.local/bin` and installs mount dependencies (FUSE on Linux, Rust toolchain on macOS for NFS).
+```bash
+curl -fsSL https://raw.githubusercontent.com/kinjo12/crm.cli/main/install.sh | sh
+```
+
+This still installs mount dependencies (FUSE on Linux, Rust toolchain on macOS for NFS), but
+since this fork has no GitHub Releases, it prints the build-from-source steps above instead of
+downloading a binary — it will not silently fall back to installing upstream's (`dzhng/crm.cli`)
+unpatched binary.
 
 After install, make sure `~/.local/bin` is in your PATH:
 
