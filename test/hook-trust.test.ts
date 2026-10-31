@@ -373,7 +373,7 @@ describe('hooks trust-on-first-use gate', () => {
  * module's trust-store path is resolved once, at module load, from the
  * real `homedir()`). To avoid touching unrelated entries in the real
  * `~/.crm/trusted_configs.json`, every entry this suite creates is keyed
- * on a unique `mkdtempSync` path and removed again in a `finally` block.
+ * on a unique `makeTempDir` path and removed again in a `finally` block.
  */
 describe('hooks TOCTOU regression (issue #6)', () => {
   function baseConfig(
