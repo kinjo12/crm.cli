@@ -11,6 +11,8 @@ import { dirname, join, resolve } from 'node:path'
 
 import { parse as parseTOML } from 'toml'
 
+import { expandTilde } from './expand-tilde'
+
 export interface CRMConfig {
   /**
    * Resolution metadata — not part of the TOML schema. Populated by
@@ -184,7 +186,12 @@ function mergeConfig(
 ): CRMConfig {
   const result = { ...base }
   if (override.database?.path) {
-    result.database = { ...result.database, path: override.database.path }
+    // Only the config file's path is expanded here. --db / CRM_DB are applied
+    // later in loadConfig and are deliberately left as given (see #35).
+    result.database = {
+      ...result.database,
+      path: expandTilde(String(override.database.path)),
+    }
   }
   if (override.pipeline) {
     result.pipeline = { ...result.pipeline }
