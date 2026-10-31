@@ -16,6 +16,10 @@ import {
   makeDeal,
   STAGES,
 } from './fuse-daemon-fixtures.ts'
+import { useTempDirs } from './temp-dirs.ts'
+
+// Remove every temporary directory this file created (see temp-dirs.ts).
+useTempDirs()
 
 /**
  * Regression coverage for `fuse-daemon.ts`'s `readdir` handler independently

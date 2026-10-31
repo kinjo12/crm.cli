@@ -13,6 +13,10 @@ import {
   STAGES,
   testConfig,
 } from './fuse-daemon-fixtures.ts'
+import { useTempDirs } from './temp-dirs.ts'
+
+// Remove every temporary directory this file created (see temp-dirs.ts).
+useTempDirs()
 
 /**
  * Regression + fix coverage for Issue #18 follow-up item 1a:

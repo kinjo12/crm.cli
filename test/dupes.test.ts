@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 
 import { createTestContext } from './helpers.ts'
+import { useTempDirs } from './temp-dirs.ts'
+
+// Remove every temporary directory this file created (see temp-dirs.ts).
+useTempDirs()
 
 describe('dupes', () => {
   test('finds likely duplicate contacts by fuzzy name', () => {

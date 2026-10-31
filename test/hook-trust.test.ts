@@ -1,11 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -18,6 +12,10 @@ import {
   untrustConfig,
 } from '../src/trust-store.ts'
 import { initGitRepo, toTOMLString } from './helpers.ts'
+import { makeTempDir, useTempDirs } from './temp-dirs.ts'
+
+// Remove every temporary directory this file created (see temp-dirs.ts).
+useTempDirs()
 
 const CRM_BIN = join(import.meta.dir, '..', 'src', 'cli.ts')
 
@@ -30,7 +28,7 @@ const CRM_BIN = join(import.meta.dir, '..', 'src', 'cli.ts')
  */
 
 function fakeHome(): string {
-  const home = mkdtempSync(join(tmpdir(), 'crm-trust-fakehome-'))
+  const home = makeTempDir('crm-trust-fakehome-')
   // Our hook commands shell out to `node`. On this machine `node` is a
   // Volta shim that derives "LocalAppData" from %USERPROFILE% (not the
   // LOCALAPPDATA env var) and fails hard if that subdirectory doesn't
@@ -94,7 +92,7 @@ function writeHookConfig(dir: string, hookName: string, marker: string): void {
 describe('hooks trust-on-first-use gate', () => {
   test('implicit config hook does not run when untrusted and no TTY is available', () => {
     const home = fakeHome()
-    const projectDir = mkdtempSync(join(tmpdir(), 'crm-trust-project-'))
+    const projectDir = makeTempDir('crm-trust-project-')
     const marker = join(projectDir, 'pwned.txt')
     writeHookConfig(projectDir, 'post-contact-add', marker)
     const dbPath = join(projectDir, 'test.db')
@@ -119,7 +117,7 @@ describe('hooks trust-on-first-use gate', () => {
 
   test('hook runs after the config is trusted via `crm config trust`', () => {
     const home = fakeHome()
-    const projectDir = mkdtempSync(join(tmpdir(), 'crm-trust-project-'))
+    const projectDir = makeTempDir('crm-trust-project-')
     const marker = join(projectDir, 'trusted-marker.txt')
     writeHookConfig(projectDir, 'post-contact-add', marker)
     const dbPath = join(projectDir, 'test.db')
@@ -165,7 +163,7 @@ describe('hooks trust-on-first-use gate', () => {
 
   test('re-trust is required after the trusted config content changes', () => {
     const home = fakeHome()
-    const projectDir = mkdtempSync(join(tmpdir(), 'crm-trust-project-'))
+    const projectDir = makeTempDir('crm-trust-project-')
     const marker = join(projectDir, 'marker.txt')
     writeHookConfig(projectDir, 'post-contact-add', marker)
     const dbPath = join(projectDir, 'test.db')
@@ -212,8 +210,8 @@ describe('hooks trust-on-first-use gate', () => {
 
   test('config supplied via --config runs hooks without any trust step', () => {
     const home = fakeHome() // fresh, empty trust store
-    const projectDir = mkdtempSync(join(tmpdir(), 'crm-trust-project-'))
-    const explicitDir = mkdtempSync(join(tmpdir(), 'crm-trust-explicit-'))
+    const projectDir = makeTempDir('crm-trust-project-')
+    const explicitDir = makeTempDir('crm-trust-explicit-')
     const marker = join(explicitDir, 'marker.txt')
     writeHookConfig(explicitDir, 'post-contact-add', marker)
     const configPath = join(explicitDir, 'crm.toml')
@@ -239,8 +237,8 @@ describe('hooks trust-on-first-use gate', () => {
 
   test('config supplied via CRM_CONFIG env var runs hooks without any trust step', () => {
     const home = fakeHome()
-    const projectDir = mkdtempSync(join(tmpdir(), 'crm-trust-project-'))
-    const explicitDir = mkdtempSync(join(tmpdir(), 'crm-trust-explicit-'))
+    const projectDir = makeTempDir('crm-trust-project-')
+    const explicitDir = makeTempDir('crm-trust-explicit-')
     const marker = join(explicitDir, 'marker.txt')
     writeHookConfig(explicitDir, 'post-contact-add', marker)
     const configPath = join(explicitDir, 'crm.toml')
@@ -263,8 +261,8 @@ describe('hooks trust-on-first-use gate', () => {
 
   test('trust is keyed per-path — trusting one config does not trust an unrelated one', () => {
     const home = fakeHome()
-    const projectA = mkdtempSync(join(tmpdir(), 'crm-trust-a-'))
-    const projectB = mkdtempSync(join(tmpdir(), 'crm-trust-b-'))
+    const projectA = makeTempDir('crm-trust-a-')
+    const projectB = makeTempDir('crm-trust-b-')
     const markerA = join(projectA, 'marker.txt')
     const markerB = join(projectB, 'marker.txt')
     writeHookConfig(projectA, 'post-contact-add', markerA)
@@ -307,7 +305,7 @@ describe('hooks trust-on-first-use gate', () => {
 
   test('gitlink-redirection: ancestor .git file pointing at a throwaway real repo does not establish a trust boundary that bypasses the hooks gate', () => {
     const home = fakeHome()
-    const workDir = mkdtempSync(join(tmpdir(), 'crm-trust-gitlink-'))
+    const workDir = makeTempDir('crm-trust-gitlink-')
 
     // A throwaway real git repository, unrelated to the attack tree.
     const realRepo = join(workDir, 'realrepo')
@@ -404,7 +402,7 @@ describe('hooks TOCTOU regression (issue #6)', () => {
   }
 
   test('executes the freshly-read, trusted hook command — not the stale in-memory one from a swapped-then-reverted file', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'crm-toctou-'))
+    const dir = makeTempDir('crm-toctou-')
     const configPath = join(dir, 'crm.toml')
     const trustedMarker = join(dir, 'trusted.txt')
     const maliciousMarker = join(dir, 'malicious.txt')
@@ -452,7 +450,7 @@ describe('hooks TOCTOU regression (issue #6)', () => {
   })
 
   test('fails safe (skips) when the freshly-read, trusted config no longer defines the hook at all', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'crm-toctou-'))
+    const dir = makeTempDir('crm-toctou-')
     const configPath = join(dir, 'crm.toml')
     const maliciousMarker = join(dir, 'malicious.txt')
     const maliciousScript = join(dir, 'malicious.js')
@@ -483,7 +481,7 @@ describe('hooks TOCTOU regression (issue #6)', () => {
   })
 
   test('load-time short-circuit: config.hooks[hookName] absent in memory skips the hook without ever reaching the trust gate, even if the on-disk config now defines it', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'crm-toctou-'))
+    const dir = makeTempDir('crm-toctou-')
     const configPath = join(dir, 'crm.toml')
     const marker = join(dir, 'should-not-run.txt')
     const script = join(dir, 'hook.js')
@@ -545,7 +543,7 @@ describe('hooks TOCTOU regression (issue #6)', () => {
  */
 describe('trust-store durability (issue #7 item 2)', () => {
   test('normal trust/untrust round-trip still works correctly', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'crm-trust-roundtrip-'))
+    const dir = makeTempDir('crm-trust-roundtrip-')
     const configPath = join(dir, 'crm.toml')
     writeFileSync(configPath, '[hooks]\n')
 
@@ -564,7 +562,7 @@ describe('trust-store durability (issue #7 item 2)', () => {
   })
 
   test('atomicWriteFileSync: the real file is always its old complete content or its new complete content, never a partial write', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'crm-atomic-write-'))
+    const dir = makeTempDir('crm-atomic-write-')
     const targetPath = join(dir, 'trusted_configs.json')
 
     atomicWriteFileSync(targetPath, 'OLD-COMPLETE-CONTENT')

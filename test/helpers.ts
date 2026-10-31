@@ -1,7 +1,6 @@
 import { execSync, spawnSync } from 'node:child_process'
 import {
   existsSync,
-  mkdtempSync,
   readdirSync,
   readFileSync,
   unlinkSync,
@@ -9,6 +8,8 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+
+import { makeTempDir } from './temp-dirs.ts'
 
 /** Whether the current platform supports FUSE/NFS mount tests */
 export const canMount = existsSync('/dev/fuse') // Linux FUSE only — macOS NFS mount causes kernel panics, skip for now
@@ -101,7 +102,7 @@ export interface RunResult {
 }
 
 export function createTestContext(opts?: { noConfig?: boolean }) {
-  const dir = mkdtempSync(join(tmpdir(), 'crm-test-'))
+  const dir = makeTempDir('crm-test-')
   const dbPath = join(dir, 'test.db')
   const configPath = join(dir, 'config.toml')
   if (!opts?.noConfig) {

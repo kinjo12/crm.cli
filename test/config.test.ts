@@ -4,16 +4,18 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readdirSync,
   readFileSync,
   writeFileSync,
 } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { platform } from 'node:process'
 
 import { createTestContext, initGitRepo } from './helpers.ts'
+import { makeTempDir, useTempDirs } from './temp-dirs.ts'
+
+// Remove every temporary directory this file created (see temp-dirs.ts).
+useTempDirs()
 
 const CRM_BIN = join(import.meta.dir, '..', 'src', 'cli.ts')
 
@@ -844,7 +846,7 @@ describe('config resolution: scoped to project directory (security)', () => {
 
   test('does not fall back to ~/.crm/config.toml when no project config exists', () => {
     const ctx = createTestContext({ noConfig: true })
-    const fakeHome = mkdtempSync(join(tmpdir(), 'crm-fakehome-'))
+    const fakeHome = makeTempDir('crm-fakehome-')
     mkdirSync(join(fakeHome, '.crm'), { recursive: true })
     writeFileSync(
       join(fakeHome, '.crm', 'config.toml'),
@@ -901,7 +903,7 @@ describe('config resolution: scoped to project directory (security)', () => {
 
   test('auto-generated default config is created at the project root, not the home directory', () => {
     const ctx = createTestContext({ noConfig: true })
-    const fakeHome = mkdtempSync(join(tmpdir(), 'crm-fakehome-'))
+    const fakeHome = makeTempDir('crm-fakehome-')
     const projectDir = join(ctx.dir, 'project')
     mkdirSync(projectDir, { recursive: true })
     initGitRepo(projectDir)
@@ -935,7 +937,7 @@ describe('config resolution: scoped to project directory (security)', () => {
 
   test('auto-generated default config is created in the current directory when no .git is found', () => {
     const ctx = createTestContext({ noConfig: true })
-    const fakeHome = mkdtempSync(join(tmpdir(), 'crm-fakehome-'))
+    const fakeHome = makeTempDir('crm-fakehome-')
     const projectDir = join(ctx.dir, 'project')
     mkdirSync(projectDir, { recursive: true })
 

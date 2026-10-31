@@ -1,10 +1,9 @@
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import type { CRMConfig } from '../src/config.ts'
 import { openDB } from '../src/db.ts'
 import type { Activity, Company, Contact, Deal } from '../src/drizzle-schema.ts'
+import { makeTempDir, trackDb } from './temp-dirs.ts'
 
 /**
  * Shared fixtures for the `fuse-daemon.ts` test suite (readdir-security and
@@ -29,9 +28,9 @@ export const EVIL_ID = '../../../pwned-id'
 
 export const NOW = new Date().toISOString()
 
-export function freshDB() {
-  const dir = mkdtempSync(join(tmpdir(), 'crm-test-fuse-daemon-'))
-  return openDB(join(dir, 'test.db'))
+export async function freshDB() {
+  const dir = makeTempDir('crm-test-fuse-daemon-')
+  return trackDb(await openDB(join(dir, 'test.db')))
 }
 
 export function testConfig(): CRMConfig {

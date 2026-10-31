@@ -8,6 +8,10 @@ import * as schema from '../src/drizzle-schema.ts'
 import { generateFS } from '../src/export-fs.ts'
 import { safeJoin, sanitizeFilenameSegment } from '../src/path-safety.ts'
 import { createTestContext } from './helpers.ts'
+import { useTempDirs } from './temp-dirs.ts'
+
+// Remove every temporary directory this file created (see temp-dirs.ts).
+useTempDirs()
 
 function testConfig(): CRMConfig {
   return {

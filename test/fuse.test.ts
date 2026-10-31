@@ -15,6 +15,7 @@ import {
   createTestContext,
   type TestContext,
 } from './helpers.ts'
+import { cleanupAll } from './temp-dirs.ts'
 
 // Use shell echo instead of fs.writeFileSync for NFS writes.
 // Bun's writeFileSync uses O_TRUNC which triggers a macOS NFS kernel panic
@@ -81,15 +82,28 @@ function unmount(ctx: FuseTestContext) {
   if (!ctx.mounted) {
     return
   }
-  ctx.run('unmount', ctx.mountPoint)
+  const result = ctx.run('unmount', ctx.mountPoint)
   ctx.mounted = false
+  return result
 }
 
-afterAll(() => {
+// Unmount first, then remove the temp dirs: deleting a directory that still
+// holds a live FUSE mount would recurse into the mount. If unmount exits
+// non-zero, afterAll throws and cleanupAll is NOT called, so the directory is
+// kept (with CRM_TEST_LEDGER set, scripts/check-test-temp.ts reports it). The
+// generic per-file hook is not used here because it would not guarantee this
+// order.
+afterAll(async () => {
   if (sharedCtx) {
-    unmount(sharedCtx)
+    const result = unmount(sharedCtx)
     sharedCtx = null
+    if (result && result.exitCode !== 0) {
+      throw new Error(
+        `unmount failed (exit ${result.exitCode}): ${result.stderr}; temp dirs are kept`,
+      )
+    }
   }
+  await cleanupAll()
 })
 
 // No-op for per-test finally blocks — real unmount is in afterAll
