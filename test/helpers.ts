@@ -89,6 +89,11 @@ won_stage = "closed-won"
 lost_stage = "closed-lost"
 `
 
+/** Escape a shell command for embedding as a TOML basic string value. */
+export function toTOMLString(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+}
+
 export interface RunResult {
   exitCode: number
   stderr: string
