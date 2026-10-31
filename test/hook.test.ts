@@ -1,28 +1,53 @@
 import { describe, expect, test } from 'bun:test'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { createTestContext } from './helpers.ts'
+import { createTestContext, toTOMLString } from './helpers.ts'
+
+// Hooks are run through `node "<script.js>"`, not a `.sh` file: on Windows a
+// `.sh` command is opened through the file association and shows a dialog per
+// test (#36). The same form is used in hook-trust.test.ts and config.test.ts.
+function writeHookConfig(dir: string, hookName: string, script: string) {
+  const hookScript = join(dir, 'hook.js')
+  writeFileSync(hookScript, script)
+  const hookCmd = `node "${hookScript.replace(/\\/g, '/')}"`
+  const configPath = join(dir, 'config.toml')
+  writeFileSync(
+    configPath,
+    `[hooks]\n${hookName} = "${toTOMLString(hookCmd)}"\n`,
+  )
+  return configPath
+}
 
 function hookSetup(hookName: string) {
   const ctx = createTestContext()
   const hookOutput = join(ctx.dir, 'hook-output.json')
-  const hookScript = join(ctx.dir, 'hook.sh')
-  writeFileSync(hookScript, `#!/bin/sh\ncat > ${hookOutput}\n`, {
-    mode: 0o755,
-  })
-  const configPath = join(ctx.dir, 'config.toml')
-  writeFileSync(configPath, `[hooks]\n${hookName} = "${hookScript}"\n`)
+  // Copy the entity JSON the hook receives on stdin into the output file.
+  const configPath = writeHookConfig(
+    ctx.dir,
+    hookName,
+    `const fs = require('node:fs')\nfs.writeFileSync(${JSON.stringify(hookOutput)}, fs.readFileSync(0))\n`,
+  )
   return { ctx, hookOutput, configPath }
 }
 
+// The abort hook leaves a marker before it exits 1. `runAborted` checks the
+// marker as well as the failing exit code: the CLI treats any non-zero hook
+// exit as an abort, so without the marker a hook that never started (node
+// missing, bad path) would make these tests pass for the wrong reason.
 function abortHookSetup(hookName: string) {
   const ctx = createTestContext()
-  const hookScript = join(ctx.dir, 'abort.sh')
-  writeFileSync(hookScript, '#!/bin/sh\nexit 1\n', { mode: 0o755 })
-  const configPath = join(ctx.dir, 'config.toml')
-  writeFileSync(configPath, `[hooks]\n${hookName} = "${hookScript}"\n`)
-  return { ctx, configPath }
+  const marker = join(ctx.dir, 'abort-ran.txt')
+  const configPath = writeHookConfig(
+    ctx.dir,
+    hookName,
+    `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran')\nprocess.exit(1)\n`,
+  )
+  const runAborted = (...args: string[]) => {
+    ctx.runFail(...args)
+    expect(existsSync(marker)).toBe(true)
+  }
+  return { ctx, configPath, runAborted }
 }
 
 describe('hooks', () => {
@@ -30,8 +55,8 @@ describe('hooks', () => {
   // contact-add
   // -------------------------------------------------------------------------
   test('pre-contact-add hook can abort creation', () => {
-    const { ctx, configPath } = abortHookSetup('pre-contact-add')
-    ctx.runFail('--config', configPath, 'contact', 'add', '--name', 'Jane')
+    const { configPath, runAborted } = abortHookSetup('pre-contact-add')
+    runAborted('--config', configPath, 'contact', 'add', '--name', 'Jane')
   })
 
   test('post-contact-add hook receives entity JSON', () => {
@@ -55,19 +80,11 @@ describe('hooks', () => {
   // contact-edit
   // -------------------------------------------------------------------------
   test('pre-contact-edit hook can abort edit', () => {
-    const { ctx, configPath } = abortHookSetup('pre-contact-edit')
+    const { ctx, configPath, runAborted } = abortHookSetup('pre-contact-edit')
     const id = ctx
       .runOK('--config', configPath, 'contact', 'add', '--name', 'Jane')
       .trim()
-    ctx.runFail(
-      '--config',
-      configPath,
-      'contact',
-      'edit',
-      id,
-      '--name',
-      'Janet',
-    )
+    runAborted('--config', configPath, 'contact', 'edit', id, '--name', 'Janet')
     // Name should be unchanged
     const out = ctx.runOK(
       '--config',
@@ -96,11 +113,11 @@ describe('hooks', () => {
   // contact-rm
   // -------------------------------------------------------------------------
   test('pre-contact-rm hook can abort deletion', () => {
-    const { ctx, configPath } = abortHookSetup('pre-contact-rm')
+    const { ctx, configPath, runAborted } = abortHookSetup('pre-contact-rm')
     const id = ctx
       .runOK('--config', configPath, 'contact', 'add', '--name', 'Jane')
       .trim()
-    ctx.runFail('--config', configPath, 'contact', 'rm', id, '--force')
+    runAborted('--config', configPath, 'contact', 'rm', id, '--force')
     // Contact should still exist
     ctx.runOK('--config', configPath, 'contact', 'show', id)
   })
@@ -120,8 +137,8 @@ describe('hooks', () => {
   // company-add
   // -------------------------------------------------------------------------
   test('pre-company-add hook can abort creation', () => {
-    const { ctx, configPath } = abortHookSetup('pre-company-add')
-    ctx.runFail('--config', configPath, 'company', 'add', '--name', 'Acme Corp')
+    const { configPath, runAborted } = abortHookSetup('pre-company-add')
+    runAborted('--config', configPath, 'company', 'add', '--name', 'Acme Corp')
   })
 
   test('post-company-add hook receives entity JSON', () => {
@@ -145,11 +162,11 @@ describe('hooks', () => {
   // company-edit
   // -------------------------------------------------------------------------
   test('pre-company-edit hook can abort edit', () => {
-    const { ctx, configPath } = abortHookSetup('pre-company-edit')
+    const { ctx, configPath, runAborted } = abortHookSetup('pre-company-edit')
     const id = ctx
       .runOK('--config', configPath, 'company', 'add', '--name', 'Acme Corp')
       .trim()
-    ctx.runFail(
+    runAborted(
       '--config',
       configPath,
       'company',
@@ -193,11 +210,11 @@ describe('hooks', () => {
   // company-rm
   // -------------------------------------------------------------------------
   test('pre-company-rm hook can abort deletion', () => {
-    const { ctx, configPath } = abortHookSetup('pre-company-rm')
+    const { ctx, configPath, runAborted } = abortHookSetup('pre-company-rm')
     const id = ctx
       .runOK('--config', configPath, 'company', 'add', '--name', 'Acme Corp')
       .trim()
-    ctx.runFail('--config', configPath, 'company', 'rm', id, '--force')
+    runAborted('--config', configPath, 'company', 'rm', id, '--force')
     ctx.runOK('--config', configPath, 'company', 'show', id)
   })
 
@@ -216,8 +233,8 @@ describe('hooks', () => {
   // deal-add
   // -------------------------------------------------------------------------
   test('pre-deal-add hook can abort creation', () => {
-    const { ctx, configPath } = abortHookSetup('pre-deal-add')
-    ctx.runFail('--config', configPath, 'deal', 'add', '--title', 'Big Deal')
+    const { configPath, runAborted } = abortHookSetup('pre-deal-add')
+    runAborted('--config', configPath, 'deal', 'add', '--title', 'Big Deal')
   })
 
   test('post-deal-add hook receives entity JSON', () => {
@@ -241,11 +258,11 @@ describe('hooks', () => {
   // deal-edit
   // -------------------------------------------------------------------------
   test('pre-deal-edit hook can abort edit', () => {
-    const { ctx, configPath } = abortHookSetup('pre-deal-edit')
+    const { ctx, configPath, runAborted } = abortHookSetup('pre-deal-edit')
     const id = ctx
       .runOK('--config', configPath, 'deal', 'add', '--title', 'Big Deal')
       .trim()
-    ctx.runFail(
+    runAborted(
       '--config',
       configPath,
       'deal',
@@ -289,11 +306,11 @@ describe('hooks', () => {
   // deal-rm
   // -------------------------------------------------------------------------
   test('pre-deal-rm hook can abort deletion', () => {
-    const { ctx, configPath } = abortHookSetup('pre-deal-rm')
+    const { ctx, configPath, runAborted } = abortHookSetup('pre-deal-rm')
     const id = ctx
       .runOK('--config', configPath, 'deal', 'add', '--title', 'Big Deal')
       .trim()
-    ctx.runFail('--config', configPath, 'deal', 'rm', id, '--force')
+    runAborted('--config', configPath, 'deal', 'rm', id, '--force')
     ctx.runOK('--config', configPath, 'deal', 'show', id)
   })
 
@@ -312,7 +329,9 @@ describe('hooks', () => {
   // deal-stage-change
   // -------------------------------------------------------------------------
   test('pre-deal-stage-change hook can abort stage move', () => {
-    const { ctx, configPath } = abortHookSetup('pre-deal-stage-change')
+    const { ctx, configPath, runAborted } = abortHookSetup(
+      'pre-deal-stage-change',
+    )
     const id = ctx
       .runOK(
         '--config',
@@ -325,7 +344,7 @@ describe('hooks', () => {
         'lead',
       )
       .trim()
-    ctx.runFail(
+    runAborted(
       '--config',
       configPath,
       'deal',
@@ -377,11 +396,11 @@ describe('hooks', () => {
   // activity-add
   // -------------------------------------------------------------------------
   test('pre-activity-add hook can abort logging', () => {
-    const { ctx, configPath } = abortHookSetup('pre-activity-add')
+    const { ctx, configPath, runAborted } = abortHookSetup('pre-activity-add')
     const id = ctx
       .runOK('--config', configPath, 'contact', 'add', '--name', 'Jane')
       .trim()
-    ctx.runFail(
+    runAborted(
       '--config',
       configPath,
       'log',

@@ -17,7 +17,7 @@ import {
   trustConfig,
   untrustConfig,
 } from '../src/trust-store.ts'
-import { initGitRepo } from './helpers.ts'
+import { initGitRepo, toTOMLString } from './helpers.ts'
 
 const CRM_BIN = join(import.meta.dir, '..', 'src', 'cli.ts')
 
@@ -67,11 +67,6 @@ function runCLI(
     stderr: proc.stderr.toString(),
     stdout: proc.stdout.toString(),
   }
-}
-
-/** Escape a shell command for embedding as a TOML basic string value. */
-function toTOMLString(s: string): string {
-  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 }
 
 /**
