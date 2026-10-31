@@ -31,6 +31,10 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { createTestContext } from '../helpers'
+import { useTempDirs } from '../temp-dirs'
+
+// Remove every temporary directory this file created (see temp-dirs.ts).
+useTempDirs()
 
 describe('scenario: solo consultant with custom pipeline and retainers', () => {
   test('manage retainer clients, log interactions, track referrals', () => {

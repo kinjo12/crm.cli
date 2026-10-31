@@ -24,6 +24,10 @@
 import { describe, expect, test } from 'bun:test'
 
 import { createTestContext } from '../helpers'
+import { useTempDirs } from '../temp-dirs'
+
+// Remove every temporary directory this file created (see temp-dirs.ts).
+useTempDirs()
 
 describe('scenario: indie founder pipeline management', () => {
   test('full sales cycle from cold outreach to closed-won', () => {

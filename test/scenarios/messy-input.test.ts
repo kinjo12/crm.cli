@@ -28,6 +28,10 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { createTestContext } from '../helpers'
+import { useTempDirs } from '../temp-dirs'
+
+// Remove every temporary directory this file created (see temp-dirs.ts).
+useTempDirs()
 
 describe('idempotent add — contact', () => {
   test('add-phone with value already on contact succeeds silently', () => {
