@@ -43,7 +43,7 @@ describe('expandTilde: expanded forms (fail before the fix)', () => {
   test('~/ with nothing after the separator resolves to home', () => {
     // Decision: a separator with no remainder yields exactly home (no
     // trailing separator), the same as join(home, '').
-    expect(expandTilde('~/', home)).toBe(join(home, ''))
+    expect(expandTilde('~/', home)).toBe(home)
   })
 })
 
