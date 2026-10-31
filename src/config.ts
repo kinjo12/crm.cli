@@ -186,8 +186,7 @@ function mergeConfig(
 ): CRMConfig {
   const result = { ...base }
   if (override.database?.path) {
-    // Only the config file's path is expanded here. --db / CRM_DB are applied
-    // later in loadConfig and are deliberately left as given (see #35).
+    // --db / CRM_DB are applied later in loadConfig, which expands them too.
     result.database = {
       ...result.database,
       path: expandTilde(String(override.database.path)),
@@ -353,9 +352,9 @@ export function loadConfig(opts: {
 
   // DB path resolution: --db flag > CRM_DB env > config file > default (~/.crm/crm.db)
   if (opts.dbPath) {
-    config.database.path = opts.dbPath
+    config.database.path = expandTilde(opts.dbPath)
   } else if (process.env.CRM_DB) {
-    config.database.path = process.env.CRM_DB
+    config.database.path = expandTilde(process.env.CRM_DB)
   }
 
   // Format: --format flag > CRM_FORMAT env > config > default

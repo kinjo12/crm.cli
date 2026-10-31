@@ -87,7 +87,10 @@ describe('expandTilde: empty path (control)', () => {
 describe('config database path with ~ (end to end)', () => {
   const CRM_BIN = join(import.meta.dir, '..', 'src', 'cli.ts')
 
-  function runWithConfigPath(dbLine: string) {
+  function runWithConfigPath(
+    dbLine: string,
+    via: { dbFlag?: string; crmDb?: string } = {},
+  ) {
     const fakeHome = makeTempDir('crm-e2e-home-')
     const cwd = makeTempDir('crm-e2e-cwd-')
     const configPath = join(cwd, 'crm.toml')
@@ -95,12 +98,28 @@ describe('config database path with ~ (end to end)', () => {
     // Never inherit CRM_DB / CRM_CONFIG from the caller, and point both home
     // variables at the throwaway directory so ~ cannot reach the real home.
     const { CRM_DB: _db, CRM_CONFIG: _cfg, ...rest } = process.env
+    const env: Record<string, string | undefined> = {
+      ...rest,
+      NO_COLOR: '1',
+      HOME: fakeHome,
+      USERPROFILE: fakeHome,
+    }
+    if (via.crmDb !== undefined) {
+      env.CRM_DB = via.crmDb
+    }
+    const dbArgs = via.dbFlag === undefined ? [] : ['--db', via.dbFlag]
     const proc = Bun.spawnSync(
-      ['bun', 'run', CRM_BIN, '--config', configPath, 'contact', 'list'],
-      {
-        cwd,
-        env: { ...rest, NO_COLOR: '1', HOME: fakeHome, USERPROFILE: fakeHome },
-      },
+      [
+        'bun',
+        'run',
+        CRM_BIN,
+        '--config',
+        configPath,
+        ...dbArgs,
+        'contact',
+        'list',
+      ],
+      { cwd, env },
     )
     return {
       fakeHome,
@@ -141,5 +160,83 @@ describe('config database path with ~ (end to end)', () => {
     expect(r.exitCode).toBe(0)
     expect(existsSync(join(r.fakeHome, '.crm', 'crm.db'))).toBe(true)
     expect(existsSync(join(r.cwd, '~'))).toBe(false)
+  })
+
+  // Issue #35: --db and CRM_DB take the same ~ expansion as the config file.
+  describe('--db and CRM_DB with ~ (fail before the fix)', () => {
+    const BACKSLASH = String.fromCharCode(92)
+    const routes = [
+      { name: '--db', via: (v: string) => ({ dbFlag: v }) },
+      { name: 'CRM_DB', via: (v: string) => ({ crmDb: v }) },
+    ]
+    for (const route of routes) {
+      test(`${route.name} ~/x.db opens the DB under home`, () => {
+        const r = runWithConfigPath('', route.via('~/x.db'))
+        expect(r.exitCode).toBe(0)
+        expect(existsSync(join(r.cwd, '~'))).toBe(false)
+        expect(existsSync(join(r.fakeHome, 'x.db'))).toBe(true)
+      })
+
+      test(`${route.name} ~\\x.db (Windows separator) opens the DB under home`, () => {
+        const r = runWithConfigPath('', route.via(`~${BACKSLASH}x.db`))
+        expect(r.exitCode).toBe(0)
+        expect(existsSync(join(r.cwd, '~'))).toBe(false)
+        expect(existsSync(join(r.fakeHome, 'x.db'))).toBe(true)
+      })
+    }
+
+    test('--db ~/d.db still beats an absolute CRM_DB, and is expanded', () => {
+      const other = join(makeTempDir('crm-e2e-env-'), 'env.db')
+      const r = runWithConfigPath('', { dbFlag: '~/d.db', crmDb: other })
+      expect(r.exitCode).toBe(0)
+      expect(existsSync(join(r.cwd, '~'))).toBe(false)
+      expect(existsSync(join(r.fakeHome, 'd.db'))).toBe(true)
+      expect(existsSync(other)).toBe(false)
+    })
+  })
+
+  // Controls (pass before and after the fix): the priority order is
+  // --db > CRM_DB > config file, and absolute paths are used as written.
+  describe('--db / CRM_DB priority and absolute paths (controls)', () => {
+    function absDb(prefix: string) {
+      return join(makeTempDir(prefix), 'a.db')
+    }
+
+    test('an absolute --db is used as written', () => {
+      const target = absDb('crm-e2e-flag-')
+      const r = runWithConfigPath('', { dbFlag: target })
+      expect(r.exitCode).toBe(0)
+      expect(existsSync(target)).toBe(true)
+      expect(existsSync(join(r.cwd, '~'))).toBe(false)
+    })
+
+    test('an absolute CRM_DB is used as written', () => {
+      const target = absDb('crm-e2e-env-')
+      const r = runWithConfigPath('', { crmDb: target })
+      expect(r.exitCode).toBe(0)
+      expect(existsSync(target)).toBe(true)
+      expect(existsSync(join(r.cwd, '~'))).toBe(false)
+    })
+
+    test('--db beats CRM_DB, and CRM_DB beats the config file', () => {
+      const fromFlag = absDb('crm-e2e-flag-')
+      const fromEnv = absDb('crm-e2e-env-')
+      const fromConfig = absDb('crm-e2e-cfg-')
+      const cfgLine = `path = ${JSON.stringify(fromConfig)}`
+
+      const all = runWithConfigPath(cfgLine, {
+        dbFlag: fromFlag,
+        crmDb: fromEnv,
+      })
+      expect(all.exitCode).toBe(0)
+      expect(existsSync(fromFlag)).toBe(true)
+      expect(existsSync(fromEnv)).toBe(false)
+      expect(existsSync(fromConfig)).toBe(false)
+
+      const envOverConfig = runWithConfigPath(cfgLine, { crmDb: fromEnv })
+      expect(envOverConfig.exitCode).toBe(0)
+      expect(existsSync(fromEnv)).toBe(true)
+      expect(existsSync(fromConfig)).toBe(false)
+    })
   })
 })
