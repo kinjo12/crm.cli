@@ -1,23 +1,13 @@
-import { afterAll, describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { describe, expect, test } from 'bun:test'
+import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { expandTilde } from '../src/expand-tilde.ts'
+import { makeTempDir, useTempDirs } from './temp-dirs.ts'
 
 // Every temporary directory this file creates is removed in afterAll, so the
 // suite leaves nothing behind in the system temp directory.
-const created: string[] = []
-function makeTempDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix))
-  created.push(dir)
-  return dir
-}
-afterAll(() => {
-  for (const dir of created) {
-    rmSync(dir, { recursive: true, force: true })
-  }
-})
+useTempDirs()
 
 // `home` is injected, so no test here touches the real home directory or the
 // real ~/.crm/crm.db.
