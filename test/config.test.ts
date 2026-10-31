@@ -709,7 +709,10 @@ describe('config resolution', () => {
     const customDB = join(ctx.dir, 'from-config.db')
     writeFileSync(
       join(ctx.dir, 'crm.toml'),
-      `[database]\npath = "${customDB}"\n`,
+      // JSON.stringify escapes backslashes. A bare "${customDB}" lets the TOML
+      // parser read them as escapes: the \f of ...\from-config.db became a
+      // form feed (measured), so the DB path broke on Windows.
+      `[database]\npath = ${JSON.stringify(customDB)}\n`,
     )
 
     // Run without --db flag — should use config's database path.
