@@ -29,6 +29,10 @@
 import { describe, expect, test } from 'bun:test'
 
 import { createTestContext } from '../helpers'
+import { useTempDirs } from '../temp-dirs'
+
+// Remove every temporary directory this file created (see temp-dirs.ts).
+useTempDirs()
 
 describe('scenario: AI agent using CRM as structured data layer', () => {
   test('agent ingests contacts, enriches them, and generates reports', () => {

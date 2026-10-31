@@ -8,6 +8,7 @@ import {
   createTestContext,
   type TestContext,
 } from './helpers.ts'
+import { cleanupAll } from './temp-dirs.ts'
 
 /**
  * Regression coverage for Issue #21: `json_escape()` in fuse-helper.c used
@@ -67,8 +68,9 @@ let ctx: FuseTestContext | null = null
 
 function unmount() {
   if (ctx?.mounted) {
-    ctx.run('unmount', ctx.mountPoint)
+    const result = ctx.run('unmount', ctx.mountPoint)
     ctx.mounted = false
+    return result
   }
 }
 
@@ -108,8 +110,20 @@ beforeAll(() => {
   ctx = c
 })
 
-afterAll(() => {
-  unmount()
+// Unmount first, then remove the temp dirs: deleting a directory that still
+// holds a live FUSE mount would recurse into the mount. If unmount exits
+// non-zero, afterAll throws and cleanupAll is NOT called, so the directory is
+// kept (with CRM_TEST_LEDGER set, scripts/check-test-temp.ts reports it). The
+// generic per-file hook is not used here because it would not guarantee this
+// order.
+afterAll(async () => {
+  const result = unmount()
+  if (result && result.exitCode !== 0) {
+    throw new Error(
+      `unmount failed (exit ${result.exitCode}): ${result.stderr}; temp dirs are kept`,
+    )
+  }
+  await cleanupAll()
 })
 
 function skipIfNoFuse(): boolean {

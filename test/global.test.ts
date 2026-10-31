@@ -3,6 +3,10 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { createTestContext } from './helpers.ts'
+import { useTempDirs } from './temp-dirs.ts'
+
+// Remove every temporary directory this file created (see temp-dirs.ts).
+useTempDirs()
 
 describe('global flags', () => {
   test('--version prints version', () => {

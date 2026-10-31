@@ -49,10 +49,13 @@ export function liveTempDirs(): string[] {
  * dropped in `cleanupAll` before the GC runs.
  */
 export function trackDb<T>(db: T): T {
-  closers.push(() => {
-    const client = (db as { $client?: { close?: () => void } }).$client
-    client?.close?.()
-  })
+  const client = (db as { $client?: { close?: () => void } }).$client
+  // Fail here, not silently at cleanup, if the DB handle no longer exposes a
+  // client to close (for example after a drizzle upgrade).
+  if (typeof client?.close !== 'function') {
+    throw new Error('trackDb: the DB handle has no $client.close()')
+  }
+  closers.push(() => client.close?.())
   return db
 }
 

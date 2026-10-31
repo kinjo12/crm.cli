@@ -30,6 +30,10 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { createTestContext } from '../helpers'
+import { useTempDirs } from '../temp-dirs'
+
+// Remove every temporary directory this file created (see temp-dirs.ts).
+useTempDirs()
 
 describe('scenario: agency BD with multi-stakeholder deals', () => {
   test('import leads, manage multi-contact deals, filter by vertical', () => {

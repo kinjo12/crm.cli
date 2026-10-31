@@ -3,6 +3,10 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { createTestContext, toTOMLString } from './helpers.ts'
+import { useTempDirs } from './temp-dirs.ts'
+
+// Remove every temporary directory this file created (see temp-dirs.ts).
+useTempDirs()
 
 // Hooks are run through `node "<script.js>"`, not a `.sh` file: on Windows a
 // `.sh` command is opened through the file association and shows a dialog per
